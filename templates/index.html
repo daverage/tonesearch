@@ -34,7 +34,7 @@
   </script>
   <link rel="stylesheet" href="static/style.css?v={{ asset_version }}">
 </head>
-<body data-ad-client="{{ adsense_client }}" data-ai-local="{{ ai_local }}">
+<body data-ad-client="{{ adsense_client }}" data-ad-slot="{{ adsense_slot }}" data-ai-local="{{ ai_local }}">
   <a class="skip-link" href="#tone3000-ai-prompt">Skip to the tone search</a>
   <div class="page">
     <header class="masthead">
@@ -175,6 +175,10 @@
     </section>
 
     </main>
+
+    <aside id="ad-banner" class="ad-slot" aria-label="Advertisement" hidden>
+      <span class="ad-label">Advertisement</span>
+    </aside>
 
 
     <footer class="footer">

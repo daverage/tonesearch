@@ -382,3 +382,7 @@ a:hover { text-decoration-thickness: 2px; }
 .btn-danger { background: var(--danger); color: #fff; }
 @media (prefers-color-scheme: dark) { .btn-danger { color: #14151a; } }
 .settings-ads-note { margin: 0 0 1rem; padding: 0.55rem 0.7rem; border-left: 3px solid var(--amp-b); border-radius: 6px; background: var(--panel-alt); font-size: 0.85rem; line-height: 1.45; }
+
+/* The single ad unit: labelled, set apart from the content, space reserved so the page doesn't jump */
+.ad-slot { margin: 2rem 0 0; padding-top: 0.6rem; border-top: 1px solid var(--border); min-height: 120px; }
+.ad-label { display: block; margin-bottom: 0.3rem; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }

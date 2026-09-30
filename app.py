@@ -33,11 +33,13 @@ app.jinja_env.globals["asset_version"] = ASSET_VERSION
 # Google AdSense (Auto ads), off unless the site owner sets their publisher ID (ca-pub-…).
 # app.js loads the script only for visitors with no saved keys of their own.
 ADSENSE_CLIENT = os.environ.get("TONESEARCH_ADSENSE_CLIENT", "").strip()
+# With an ad unit's slot ID, the page shows that one banner above the footer instead of Auto ads.
+ADSENSE_SLOT = os.environ.get("TONESEARCH_ADSENSE_SLOT", "").strip()
 
 
 @app.context_processor
 def _page_globals():
-    return {"current_year": time.gmtime().tm_year, "adsense_client": ADSENSE_CLIENT}
+    return {"current_year": time.gmtime().tm_year, "adsense_client": ADSENSE_CLIENT, "adsense_slot": ADSENSE_SLOT}
 
 # Per-visitor hourly limits: every search spends the site owner's TONE3000 and AI quota.
 LIMITS = {

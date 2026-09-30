@@ -235,6 +235,7 @@ Visitors using their own AI provider can set the same values under **Settings �
 | `TONESEARCH_REQUEST_BUDGET_SECONDS` | 85 | Overall time allowed for one search or pack question |
 | `TONESEARCH_DATA_DIR` | `data/` | Where the rate-limit database is kept |
 | `TONESEARCH_ADSENSE_CLIENT` | none (no ads) | Your Google AdSense publisher ID (`ca-pub-…`). Ads load only when this is set. |
+| `TONESEARCH_ADSENSE_SLOT` | none | An ad unit's slot ID (`data-ad-slot`). With it, the page shows that one banner above the footer; without it, Auto ads. |
 | `PORT` | 5090 | Port for `python3 app.py` |
 | `FLASK_DEBUG` | off | Set to `1` for Flask's debug mode (local development only) |
 
@@ -288,7 +289,10 @@ Serving under a sub-path such as `example.com/tonesearch` works: the page sets i
 
 ### Ads
 
-Ads are off by default. To show Google AdSense Auto ads, set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID (`ca-pub-…`). Don't paste Google's ad snippet into the template: the app adds it itself.
+Ads are off by default. Set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID (`ca-pub-…`) to turn them on. Don't paste Google's ad snippet into the template: the app adds it itself.
+
+- **One banner (recommended):** create a display ad unit in AdSense and set `TONESEARCH_ADSENSE_SLOT` to its `data-ad-slot` number. The page shows that single responsive banner, labelled "Advertisement", above the footer.
+- **Auto ads:** with no slot ID, Google decides where ads go. If you use a banner, exclude the app's pages from Auto ads in AdSense (**Ads → By site → Page exclusions**) so Google doesn't add more ads around it.
 
 - Ads load for every visitor, except on a server running local AI. See [Privacy and security](#privacy-and-security) for what that means for visitors' keys.
 - In the UK and EU, publish a consent message in AdSense under **Privacy & messaging → European regulations**.

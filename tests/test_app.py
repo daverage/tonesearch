@@ -109,6 +109,9 @@ def test_adsense_only_with_the_owners_publisher_id(client, monkeypatch):
     html = client.get("/").get_data(as_text=True)
     # The ad script itself is added by app.js, and only for visitors without their own keys.
     assert 'name="google-adsense-account" content="ca-pub-1234567890"' in html and "adsbygoogle.js" not in html
+    monkeypatch.setattr(app_module, "ADSENSE_SLOT", "4368199345")
+    html = client.get("/").get_data(as_text=True)
+    assert 'data-ad-slot="4368199345"' in html and 'id="ad-banner"' in html
 
 
 def test_visitor_ai_settings_never_borrow_server_secrets(monkeypatch):

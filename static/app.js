@@ -85,14 +85,24 @@
   const filters = setupFilters();
   setupWelcome();
 
-  // Google Auto ads, for every visitor. Not on a local run: that is the owner's own machine.
-  const adClient = document.body.dataset.adClient;
+  // Google ads, for every visitor. Not on a local run: that is the owner's own machine.
+  // With a slot ID: one responsive banner above the footer (a manual ad unit). Without one: Auto ads.
+  const { adClient, adSlot } = document.body.dataset;
   if (adClient && !localModel) {
     const script = document.createElement("script");
     script.async = true;
     script.crossOrigin = "anonymous";
     script.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(adClient)}`;
     document.head.append(script);
+    if (adSlot) {
+      const banner = document.getElementById("ad-banner");
+      const unit = el("ins", "adsbygoogle");
+      unit.style.display = "block";
+      Object.assign(unit.dataset, { adClient, adSlot, adFormat: "auto", fullWidthResponsive: "true" });
+      banner.append(unit);
+      banner.hidden = false;
+      try { (window.adsbygoogle = window.adsbygoogle || []).push({}); } catch { /* blocked by the visitor */ }
+    }
   }
 
   const compact = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
