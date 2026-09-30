@@ -183,10 +183,10 @@
         <summary>Licences, affiliation and privacy</summary>
       <p><strong>Captures belong to their creators.</strong> Every pack, file and image comes from <a href="https://www.tone3000.com/" target="_blank" rel="noopener">TONE3000</a> and is used under its creator's licence, shown on each pack. Check the licence before using a capture in your own work.</p>
       <p><strong>Not affiliated.</strong> TONE Search is an independent project. It is not affiliated with, or endorsed by, TONE3000, Neural Amp Modeler, Cloudflare, or any artist, band or gear maker mentioned. All product names, trademarks and artist names belong to their owners and are used only to describe tones.</p>
-      <p><strong>Privacy.</strong> Your searches and questions are sent to the AI provider, to TONE3000 and, with web research on, to DuckDuckGo to produce results. To apply the hourly limit, this site keeps your IP address with the time of each request for up to one hour, then deletes it. Settings and your own keys are saved only in your browser. This site shows Google ads, and Google may use cookies to serve and measure them, and to personalise them where you allow it; see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">how Google uses information from sites that use its services</a>. Ads are switched off for visitors who save their own keys.</p>
+      <p><strong>Privacy.</strong> Your searches and questions are sent to the AI provider, to TONE3000 and, with web research on, to DuckDuckGo to produce results. To apply the hourly limit, this site keeps your IP address with the time of each request for up to one hour, then deletes it. Settings and your own keys are saved only in your browser. This site shows Google ads, and Google may use cookies to serve and measure them, and to personalise them where you allow it; see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">how Google uses information from sites that use its services</a>.</p>
       <p>Provided as is, without warranty of any kind. Searches are limited per visitor each hour unless you add your own AI key and TONE3000 key in Settings.</p>
       </details>
-      <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. All rights reserved.</p>
+      <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. The site and its content: all rights reserved. <a href="https://github.com/daverage/tonesearch" target="_blank" rel="noopener">Source code on GitHub</a>, free for non-commercial use under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener">PolyForm Noncommercial License</a>.</p>
     </footer>
   </div>
   <dialog id="welcome-dialog" class="settings welcome" aria-labelledby="welcome-title" aria-describedby="welcome-intro">
@@ -217,7 +217,8 @@
     <form id="settings-form" method="dialog" novalidate>
       <h2 id="settings-title">Settings</h2>
       <p class="settings-note">Use your own keys instead of this site's.</p>
-      <p class="settings-privacy"><strong>Your keys stay private.</strong> They're saved only in this browser. Each search sends them securely (HTTPS) to this site's server, which uses them for that one request to contact TONE3000 and your AI provider, then forgets them. They are never stored, logged or shared, and never included in exports. Once you save your own keys, this site stops loading Google ads, so no third-party script runs on the page alongside them.</p>
+      <p class="settings-privacy"><strong>Your keys stay private.</strong> They're saved only in this browser. Each search sends them securely (HTTPS) to this site's server, which uses them for that one request to contact TONE3000 and your AI provider, then forgets them. They are never stored, logged or shared, and never included in exports.</p>
+      <p class="settings-ads-note"><strong>Please note:</strong> this page shows Google ads. Like any script on a web page, the ad code can technically read what's saved in your browser for this site, including these keys. Use keys you can revoke, ideally with a spending limit, and remove them with <em>Clear all</em> when you're done.</p>
       <p class="settings-limit"><strong>No hourly limit with your own keys:</strong> add <em>both</em> an AI key and a TONE3000 key. With only one of them, searches still count toward this site's hourly limit.</p>
       <p id="settings-limit-status" class="settings-limit-status" aria-live="polite"></p>
 

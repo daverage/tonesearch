@@ -288,9 +288,9 @@ Serving under a sub-path such as `example.com/tonesearch` works: the page sets i
 
 ### Ads
 
-Ads are off by default. To show Google AdSense Auto ads, set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID (`ca-pub-…`). Don't paste Google's ad snippet into the template: the app adds it itself, so it can keep ads away from visitors' keys.
+Ads are off by default. To show Google AdSense Auto ads, set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID (`ca-pub-…`). Don't paste Google's ad snippet into the template: the app adds it itself.
 
-- Ads are never loaded for visitors who save their own keys in Settings, or on a server running local AI. See [Privacy and security](#privacy-and-security).
+- Ads load for every visitor, except on a server running local AI. See [Privacy and security](#privacy-and-security) for what that means for visitors' keys.
 - In the UK and EU, publish a consent message in AdSense under **Privacy & messaging → European regulations**.
 
 ---
@@ -302,7 +302,7 @@ Ads are off by default. To show Google AdSense Auto ads, set `TONESEARCH_ADSENSE
   - They are sent over HTTPS with each request, as `X-AI-*` and `X-TONE3000-Key` headers.
   - The server uses them for that one request, then forgets them. They are never stored or logged, and never included in exports.
   - A visitor who sets their own AI provider never falls back to the server's secret keys.
-- **Keys and ads never share a page.** Any script on the page can read `localStorage`, so the ad script is not loaded once a visitor has saved keys. Saving keys while ads are running reloads the page first.
+- **Ads share the page with saved keys.** Any script on the page, including the ad script, can read `localStorage` and what is typed into the page. When ads are turned on, visitors who save their own keys are exposed to the ad code, and the Settings dialog tells them so. They are advised to use revocable keys with spending limits. To remove this exposure, turn ads off.
 - **The same site means shared browser storage.** Browsers share `localStorage` across every page on the same domain, not just this app's folder. If other pages on your domain run third-party scripts, host TONE Search on its own subdomain.
 - **Visitors' AI URLs are restricted.** A visitor's custom AI URL must be a public `https://` host, and redirects are refused. Visitors cannot choose `local`. This stops the server from being used to reach private addresses.
 - **Web research page fetches are restricted too.** Pages are only fetched from public hosts, without following redirects.

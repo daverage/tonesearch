@@ -85,10 +85,9 @@
   const filters = setupFilters();
   setupWelcome();
 
-  // Google Auto ads. Never loaded once a visitor saves their own keys, because any script on this
-  // page could read those keys from localStorage.
+  // Google Auto ads, for every visitor. Not on a local run: that is the owner's own machine.
   const adClient = document.body.dataset.adClient;
-  if (adClient && !hasStoredKeys() && !localModel) { // no ads on a local run: it is the owner's own machine
+  if (adClient && !localModel) {
     const script = document.createElement("script");
     script.async = true;
     script.crossOrigin = "anonymous";
@@ -907,8 +906,6 @@
         return;
       }
       save(next);
-      // The ad script cannot be unloaded, so reload without it before the new keys are used.
-      if (document.querySelector('script[src*="adsbygoogle"]') && hasStoredKeys()) { location.reload(); return; }
       if (!dialog.close) { event.preventDefault(); closeDialog(); }
       announce("Settings saved.");
     });

@@ -381,3 +381,4 @@ a:hover { text-decoration-thickness: 2px; }
 .settings-confirm p { margin: 0 0 0.7rem; font-size: 0.88rem; line-height: 1.45; }
 .btn-danger { background: var(--danger); color: #fff; }
 @media (prefers-color-scheme: dark) { .btn-danger { color: #14151a; } }
+.settings-ads-note { margin: 0 0 1rem; padding: 0.55rem 0.7rem; border-left: 3px solid var(--amp-b); border-radius: 6px; background: var(--panel-alt); font-size: 0.85rem; line-height: 1.45; }
