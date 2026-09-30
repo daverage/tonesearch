@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="{{ request.script_root }}/">
+  <title>TONE Search: find NAM captures for any guitar or bass tone</title>
+  {% if adsense_client %}<meta name="google-adsense-account" content="{{ adsense_client }}">{% endif %}
+  <meta name="description" content="Describe the guitar or bass tone you want, from a famous record or in your own words. AI explains the tone and gear, then finds and ranks matching Neural Amp Modeler (NAM) captures on TONE3000.">
+  <meta name="keywords" content="NAM, Neural Amp Modeler, TONE3000, amp captures, guitar tone, bass tone, amp profiles, tone matching">
+  <meta name="theme-color" content="#5b5fee">
+  <link rel="canonical" href="{{ request.base_url }}">
+  <link rel="icon" href="static/favicon.ico" sizes="any">
+  <link rel="icon" href="static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TONE Search">
+  <meta property="og:title" content="TONE Search: find NAM captures for any guitar or bass tone">
+  <meta property="og:description" content="Describe a tone in plain words. AI works out the amps and gear behind it and ranks matching NAM captures from TONE3000.">
+  <meta property="og:url" content="{{ request.base_url }}">
+  <meta property="og:image" content="{{ request.url_root }}static/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="TONE Search logo: a magnifying glass over a sound wave">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="TONE Search: find NAM captures for any guitar or bass tone">
+  <meta name="twitter:description" content="Describe a tone in plain words. AI works out the gear and ranks matching NAM captures from TONE3000.">
+  <meta name="twitter:image" content="{{ request.url_root }}static/og-image.png">
+  <script type="application/ld+json">
+  {"@context": "https://schema.org", "@type": "WebApplication", "name": "TONE Search",
+   "url": "{{ request.base_url }}", "applicationCategory": "MultimediaApplication", "operatingSystem": "Any",
+   "description": "Describe a guitar or bass tone and find matching Neural Amp Modeler captures on TONE3000, ranked by AI.",
+   "offers": {"@type": "Offer", "price": "0", "priceCurrency": "GBP"}}
+  </script>
+  <link rel="stylesheet" href="static/style.css?v={{ asset_version }}">
+</head>
+<body data-ad-client="{{ adsense_client }}" data-ai-local="{{ ai_local }}">
+  <a class="skip-link" href="#tone3000-ai-prompt">Skip to the tone search</a>
+  <div class="page">
+    <header class="masthead">
+      <div class="masthead-top">
+        <div class="eyebrow">NAM capture discovery</div>
+        <button type="button" id="btn-about" class="link-btn btn-small-link" aria-haspopup="dialog">How it works</button>
+        <button type="button" id="btn-settings" class="btn btn-secondary btn-small" aria-haspopup="dialog">Settings<span id="settings-badge" class="settings-badge" hidden> · your keys</span></button>
+      </div>
+      <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> TONE Search</h1>
+      <p class="intro">Describe the guitar or bass tone you are after. The AI explains the tone and the gear behind it, then finds and ranks matching Neural Amp Modeler captures from <a href="https://www.tone3000.com/" target="_blank" rel="noopener">TONE3000</a>. Open any pack to download its NAM files or ask which one to use.</p>
+      <ol class="steps">
+        <li><strong>Describe it.</strong> Name a song, an artist or an album, or just say what you hear: "glassy clean with a bit of hair", "tight modern metal rhythm".</li>
+        <li><strong>Read the brief.</strong> The AI sums up the tone, lists the amps, pedals and guitars behind it, and gives practical tips. With web research on, it checks real sources first.</li>
+        <li><strong>Pick a capture.</strong> Matching packs are ranked by fit. Open one to see its NAM files, download them, or ask which file suits rhythm or lead.</li>
+      </ol>
+    </header>
+
+    <main id="main">
+
+    {% if not ai_ready %}
+    <p class="notice" id="server-ai-notice">The AI provider is not configured on this server yet, so searches will fail. Add your own AI key in Settings, or the site owner needs to set the AI environment variables (see README.md).</p>
+    {% endif %}
+
+    <section id="tone3000-ai-section" class="t3ai" aria-labelledby="search-title">
+      <h2 id="search-title" class="visually-hidden">Tone search</h2>
+      <div id="t3ai-thread" class="t3ai-thread"></div>
+      <div class="panel t3ai-composer">
+        <label for="tone3000-ai-prompt" id="t3ai-label">Describe the tone you want</label>
+        <textarea id="tone3000-ai-prompt" rows="3" maxlength="600" aria-required="true" aria-describedby="prompt-help" placeholder="e.g. Early Stevie Ray Vaughan: fat, bright, on the edge of breakup, digs in when I pick hard"></textarea>
+        <p id="prompt-help" class="visually-hidden">Press Control or Command plus Enter to search.</p>
+        <div class="composer-footer">
+          <label class="checkbox-row"><input type="checkbox" id="tone3000-ai-research" checked> Web research</label>
+          <button type="button" id="btn-filters" class="btn btn-secondary btn-small" aria-expanded="false" aria-controls="filters-panel">
+            Filters<span id="filters-count" class="filters-count" hidden></span>
+          </button>
+          <span class="spacer"></span>
+          <button type="button" id="btn-export" class="btn btn-secondary btn-small" hidden aria-describedby="export-help">Export</button>
+          <span id="export-help" class="visually-hidden">Downloads this conversation as a Markdown file. Your keys are never included.</span>
+          <button type="button" id="btn-t3ai-reset" class="btn btn-secondary btn-small" hidden>Start over</button>
+          <button type="button" id="btn-tone3000-ai-search" class="btn btn-primary btn-small">Find tones</button>
+        </div>
+        <p id="filters-summary" class="filters-summary" hidden></p>
+        <div id="filters-panel" class="filters" role="group" aria-labelledby="filters-heading" hidden>
+          <h2 id="filters-heading" class="visually-hidden">Search filters</h2>
+          <fieldset class="filter-group filter-wide">
+            <legend>Gear type</legend>
+            <div class="chip-options">
+              <label class="chip-option"><input type="checkbox" name="gears" value="amp"> Amp head</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="amp-cab"> Full rig</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="pedal"> Pedal</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="outboard"> Outboard</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="cab"> Cab</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="space"> Reverb &amp; delay</label>
+              <label class="chip-option"><input type="checkbox" name="gears" value="experimental"> Experimental</label>
+            </div>
+          </fieldset>
+          <div class="filter-selects">
+            <label class="field">Format
+              <select name="format">
+                <option value="nam">NAM</option><option value="ir">IR (impulse response)</option><option value="aida-x">AIDA-X</option>
+                <option value="aa-snapshot">AA snapshot</option><option value="proteus">Proteus</option>
+              </select>
+            </label>
+            <label class="field">NAM version
+              <select name="architecture" aria-describedby="arch-help">
+                <option value="2">A2 (newest)</option><option value="1">A1</option><option value="any">Any</option>
+              </select>
+            </label>
+            <label class="field">Search TONE3000 by
+              <select name="sort">
+                <option value="best-match">Best match</option><option value="downloads-all-time">Most downloaded</option>
+                <option value="trending">Trending</option><option value="newest">Newest</option><option value="oldest">Oldest</option>
+              </select>
+            </label>
+          </div>
+          <p class="filter-help filter-wide">"Search TONE3000 by" chooses which packs are fetched and sets the starting order; you can re-order the results above the cards at any time.</p>
+          <p id="arch-help" class="filter-help">A2 is the newest NAM format; choose A1 or Any if your player or pedal only runs A1 captures. Only applies to NAM.</p>
+          <fieldset class="filter-group">
+            <legend>Size</legend>
+            <div class="chip-options">
+              <label class="chip-option"><input type="checkbox" name="sizes" value="standard"> Standard</label>
+              <label class="chip-option"><input type="checkbox" name="sizes" value="lite"> Lite</label>
+              <label class="chip-option"><input type="checkbox" name="sizes" value="feather"> Feather</label>
+              <label class="chip-option"><input type="checkbox" name="sizes" value="nano"> Nano</label>
+            </div>
+            <p class="filter-help">Smaller sizes use less processing power, which matters on pedals and hardware players.</p>
+          </fieldset>
+          <fieldset class="filter-group">
+            <legend>Quality</legend>
+            <div class="chip-options">
+              <label class="chip-option"><input type="checkbox" name="calibrated"> Calibrated only</label>
+              <label class="chip-option"><input type="checkbox" name="verified"> Verified only</label>
+            </div>
+          </fieldset>
+          <div class="token-field" data-kind="makes" data-label="Make" data-placeholder="e.g. Marshall"></div>
+          <div class="token-field" data-kind="tags" data-label="Tags" data-placeholder="e.g. clean, crunch"></div>
+          <div class="token-field" data-kind="creators" data-label="Creator" data-placeholder="TONE3000 username"></div>
+          <div class="filters-actions">
+            <button type="button" id="btn-filters-clear" class="btn btn-secondary btn-small">Clear filters</button>
+            <button type="button" id="btn-filters-apply" class="btn btn-primary btn-small" hidden>Apply to results</button>
+          </div>
+        </div>
+        <div id="tone3000-ai-status" class="info"></div>
+      </div>
+      <div id="results-bar" class="results-bar" hidden>
+        <label for="results-order">Order results</label>
+        <select id="results-order">
+          <option value="fit">Best fit (AI)</option>
+          <option value="downloads">Most downloaded</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="catalogue">TONE3000 order</option>
+        </select>
+      </div>
+      <div id="tone3000-ai-results" class="t3ai-grid" hidden tabindex="-1" aria-label="Matching packs" role="region"></div>
+    </section>
+
+    <section class="about" aria-labelledby="about-title">
+      <h2 id="about-title">About TONE Search</h2>
+      <div class="about-grid">
+        <div>
+          <h3>What is a NAM capture?</h3>
+          <p><a href="https://www.neuralampmodeler.com/" target="_blank" rel="noopener">Neural Amp Modeler</a> is a free, open-source way to capture a real amp, pedal or full rig as a small model file (<code>.nam</code>). Load it in a NAM player and your guitar goes through a faithful copy of that gear.</p>
+        </div>
+        <div>
+          <h3>Where do the captures come from?</h3>
+          <p>Every pack is a real upload on <a href="https://www.tone3000.com/" target="_blank" rel="noopener">TONE3000</a>, the community library of NAM captures. TONE Search does not host or change them; downloads come straight from TONE3000 and credit their creators.</p>
+        </div>
+        <div>
+          <h3>How good are the matches?</h3>
+          <p>The fit score is the AI's judgement of how close a pack gets to your tone, based on its gear, tags and description. It is a starting point, not a verdict: try the top few and trust your ears.</p>
+        </div>
+        <div>
+          <h3>Tips for better results</h3>
+          <p>Name the amp if you know it. Say whether you want a head (to pair with your own cab) or a full rig. Refine in plain words, such as "more gain", "darker" or "cheaper amp". Turn on web research for songs and artists so the gear comes from real sources.</p>
+        </div>
+      </div>
+    </section>
+
+    </main>
+
+
+    <footer class="footer">
+      <p><strong>AI can be wrong.</strong> Tone briefs, gear lists, tips and fit scores are generated by AI and may be inaccurate. They are suggestions, not facts: trust your ears.</p>
+      <details class="footer-legal">
+        <summary>Licences, affiliation and privacy</summary>
+      <p><strong>Captures belong to their creators.</strong> Every pack, file and image comes from <a href="https://www.tone3000.com/" target="_blank" rel="noopener">TONE3000</a> and is used under its creator's licence, shown on each pack. Check the licence before using a capture in your own work.</p>
+      <p><strong>Not affiliated.</strong> TONE Search is an independent project. It is not affiliated with, or endorsed by, TONE3000, Neural Amp Modeler, Cloudflare, or any artist, band or gear maker mentioned. All product names, trademarks and artist names belong to their owners and are used only to describe tones.</p>
+      <p><strong>Privacy.</strong> Your searches and questions are sent to the AI provider, to TONE3000 and, with web research on, to DuckDuckGo to produce results. To apply the hourly limit, this site keeps your IP address with the time of each request for up to one hour, then deletes it. Settings and your own keys are saved only in your browser. This site shows Google ads, and Google may use cookies to serve and measure them, and to personalise them where you allow it; see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">how Google uses information from sites that use its services</a>. Ads are switched off for visitors who save their own keys.</p>
+      <p>Provided as is, without warranty of any kind. Searches are limited per visitor each hour unless you add your own AI key and TONE3000 key in Settings.</p>
+      </details>
+      <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. All rights reserved.</p>
+    </footer>
+  </div>
+  <dialog id="welcome-dialog" class="settings welcome" aria-labelledby="welcome-title" aria-describedby="welcome-intro">
+    <form method="dialog">
+      <h2 id="welcome-title"><img src="static/icon.svg" alt="" width="28" height="28"> Welcome to TONE Search</h2>
+      <p id="welcome-intro">Describe the guitar or bass tone you want, from a famous record or in your own words. The AI explains the tone and the gear behind it, then finds and ranks matching Neural Amp Modeler (NAM) captures from TONE3000 that you can download.</p>
+      {% if ai_local %}
+      <h3>Running on your computer</h3>
+      <p>This copy of TONE Search uses <strong>local AI ({{ ai_local }})</strong> on this computer, so there is no hourly limit and your AI tuning in Settings applies to it. It still needs a TONE3000 key, either on the server or in Settings, to find captures.</p>
+      {% else %}
+      <h3>Try it for free</h3>
+      <p>{% if searches_per_hour > 0 %}You can test it out with <strong>{{ searches_per_hour }} searches an hour</strong> using this site's keys.{% else %}You can test it out using this site's keys.{% endif %} No sign-up needed.</p>
+      {% endif %}
+      <h3>Want more?</h3>
+      <p>For more than that, connect your own free keys in <strong>Settings</strong>. They're saved only in your browser, used just for each search and never stored on this site's server. With both set there is no hourly limit.</p>
+      <ol class="welcome-steps">
+        <li><strong>A TONE3000 key (easy).</strong> <a href="https://www.tone3000.com/" target="_blank" rel="noopener">Register for a free TONE3000 account</a>, then copy the secret key (it starts with <code>t3k_cs_</code>) from your <a href="https://www.tone3000.com/settings" target="_blank" rel="noopener">TONE3000 settings</a>.</li>
+        <li><strong>Your own AI (slightly technical).</strong> Set up a free <a href="https://developers.cloudflare.com/workers-ai/get-started/rest-api/" target="_blank" rel="noopener">Cloudflare Workers AI</a> account: create an API token with the <em>Workers AI</em> template, note your Account ID, and pick a model from the <a href="https://developers.cloudflare.com/workers-ai/models/" target="_blank" rel="noopener">model catalogue</a>. Or connect any other OpenAI-compatible AI host you already use.</li>
+      </ol>
+      <div class="settings-actions">
+        <button type="button" id="btn-welcome-settings" class="btn btn-secondary btn-small">Set up my keys</button>
+        <span class="spacer"></span>
+        <button type="submit" id="btn-welcome-start" class="btn btn-primary btn-small" autofocus>Start searching</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="settings-dialog" class="settings" aria-labelledby="settings-title">
+    <form id="settings-form" method="dialog" novalidate>
+      <h2 id="settings-title">Settings</h2>
+      <p class="settings-note">Use your own keys instead of this site's.</p>
+      <p class="settings-privacy"><strong>Your keys stay private.</strong> They're saved only in this browser. Each search sends them securely (HTTPS) to this site's server, which uses them for that one request to contact TONE3000 and your AI provider, then forgets them. They are never stored, logged or shared, and never included in exports. Once you save your own keys, this site stops loading Google ads, so no third-party script runs on the page alongside them.</p>
+      <p class="settings-limit"><strong>No hourly limit with your own keys:</strong> add <em>both</em> an AI key and a TONE3000 key. With only one of them, searches still count toward this site's hourly limit.</p>
+      <p id="settings-limit-status" class="settings-limit-status" aria-live="polite"></p>
+
+      <fieldset>
+        <legend>AI provider</legend>
+        <label class="field">Provider
+          <select name="provider">
+            <option value="">{% if ai_local %}Local AI on this computer: {{ ai_local }} (default){% else %}This site's AI (default){% endif %}</option>
+            <option value="cloudflare">Cloudflare Workers AI</option>
+            <option value="custom">Custom OpenAI-compatible API</option>
+          </select>
+        </label>
+        <div data-provider="cloudflare" hidden>
+          <p class="settings-help">Workers AI has a free daily allowance. Follow Cloudflare's
+            <a href="https://developers.cloudflare.com/workers-ai/get-started/rest-api/" target="_blank" rel="noopener">REST API guide</a>
+            to create an API token (use the <em>Workers AI</em> template) and find your Account ID in the dashboard.
+            Choose a model from the <a href="https://developers.cloudflare.com/workers-ai/models/" target="_blank" rel="noopener">model catalogue</a>;
+            text-generation models that don't "think" are fastest.</p>
+          <label class="field">Account ID <input name="cloudflare.account_id" autocomplete="off" spellcheck="false" placeholder="32 hexadecimal characters"></label>
+          <label class="field">API token <input name="cloudflare.api_key" type="password" autocomplete="off"></label>
+          <label class="field">Model <input name="cloudflare.model" autocomplete="off" spellcheck="false" list="cf-models" placeholder="@cf/zai-org/glm-4.7-flash"></label>
+          <datalist id="cf-models"></datalist>
+          <details class="model-picks">
+            <summary>Suggested models</summary>
+            <p class="settings-help">Prices are per million tokens. "Searches per free day" assumes about 6,000 input tokens and
+              1,000 generated tokens per complete search, across all its AI calls, within Workers AI's free allowance of
+              10,000 neurons a day, which is shared across all models. Thinking, retries and longer answers use more, so
+              expect fewer. Check current prices on Cloudflare's
+              <a href="https://developers.cloudflare.com/workers-ai/platform/pricing/" target="_blank" rel="noopener">pricing page</a>.</p>
+            <ul id="cf-model-list" class="model-list"></ul>
+          </details>
+        </div>
+        <div data-provider="custom" hidden>
+          <label class="field">Base URL <input name="custom.base_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
+          <label class="field">API key <input name="custom.api_key" type="password" autocomplete="off" placeholder="Optional for keyless endpoints"></label>
+          <label class="field">Model <input name="custom.model" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini"></label>
+        </div>
+      </fieldset>
+
+      <fieldset data-tuning hidden>
+        <legend>AI tuning</legend>
+        <p class="settings-note">Only used with your own AI provider or local AI. Leave blank for the default shown; values outside the allowed range are adjusted to fit.</p>
+        <div class="tuning-grid">
+          <label class="field">Max tokens <input name="tuning.max_tokens" type="number" inputmode="decimal" min="64" max="8192" step="1" placeholder="1800"></label>
+          <label class="field">Temperature <input name="tuning.temperature" type="number" inputmode="decimal" min="0" max="2" step="0.05" placeholder="0.3"></label>
+          <label class="field">Timeout (seconds) <input name="tuning.timeout_seconds" type="number" inputmode="decimal" min="5" max="180" step="1" placeholder="90"></label>
+          <label class="field">History messages <input name="tuning.history_messages" type="number" inputmode="decimal" min="0" max="12" step="1" placeholder="8"></label>
+          <label class="field">History message characters <input name="tuning.history_message_chars" type="number" inputmode="decimal" min="100" max="4000" step="1" placeholder="1200"></label>
+          <label class="field">Research characters <input name="tuning.research_chars" type="number" inputmode="decimal" min="0" max="20000" step="1" placeholder="5000"></label>
+          <label class="field">Max reply characters <input name="tuning.max_reply_chars" type="number" inputmode="decimal" min="200" max="6000" step="1" placeholder="1800"></label>
+          <label class="field">Max explanation characters <input name="tuning.max_explanation_chars" type="number" inputmode="decimal" min="200" max="4000" step="1" placeholder="900"></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>TONE3000</legend>
+        <p class="settings-help"><a href="https://www.tone3000.com/" target="_blank" rel="noopener">Register for a free TONE3000 account</a>,
+          then open your <a href="https://www.tone3000.com/settings" target="_blank" rel="noopener">TONE3000 settings</a> to find your API key.
+          Use the secret key, which starts with <code>t3k_cs_</code>.</p>
+        <label class="field">Secret key <input name="tone3000_api_key" type="password" autocomplete="off" placeholder="t3k_cs_… (optional)"></label>
+      </fieldset>
+
+      <p id="settings-error" class="t3ai-warning" role="alert" tabindex="-1" hidden></p>
+      <div id="settings-clear-confirm" class="settings-confirm" role="alertdialog" aria-labelledby="clear-confirm-text" hidden>
+        <p id="clear-confirm-text"><strong>Clear all settings?</strong> This deletes your saved AI provider, API keys, TONE3000 key and AI tuning from this browser. It cannot be undone, and you will need your keys again to use them.</p>
+        <div class="settings-actions">
+          <button type="button" id="btn-clear-keep" class="btn btn-secondary btn-small">Keep my settings</button>
+          <span class="spacer"></span>
+          <button type="button" id="btn-clear-yes" class="btn btn-danger btn-small">Yes, clear everything</button>
+        </div>
+      </div>
+      <div class="settings-actions" id="settings-main-actions">
+        <button type="button" id="btn-settings-clear" class="btn btn-secondary btn-small">Clear all</button>
+        <span class="spacer"></span>
+        <button type="button" id="btn-settings-cancel" class="btn btn-secondary btn-small">Cancel</button>
+        <button type="submit" class="btn btn-primary btn-small">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="announcer" class="visually-hidden" aria-live="polite"></div>
+  <script src="static/app.js?v={{ asset_version }}"></script>
+</body>
+</html>

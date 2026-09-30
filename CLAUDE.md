@@ -1,0 +1,44 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Code navigation: use codebase-memory-mcp
+
+Use the `codebase-memory-mcp` graph tools before grep or reading whole files: `search_graph` for symbols, `trace_path` for callers and callees, `get_code_snippet` for source, and `get_architecture` for an overview. If the project isn't indexed yet, run `index_repository` on this repo path first. Before relying on a file, call `check_index_coverage` for it, and read any lines it reports as missed directly. Use grep for literals, config, templates, and static assets.
+
+## Commands
+
+```bash
+pip install -r requirements-dev.txt        # flask, pydantic, ddgs, pytest
+python app.py                              # dev server at http://127.0.0.1:5090 (PORT, FLASK_DEBUG=1)
+pytest                                     # all tests
+pytest tests/test_app.py::test_name        # single test
+```
+
+## Architecture
+
+TONE Search is a Flask app. A user describes a guitar tone; the app returns an AI "tone brief" and TONE3000 NAM (Neural Amp Modeler) packs ranked by AI.
+
+- `app.py` holds the Flask routes, input validation, and per-visitor hourly rate limiting. The limiter stores hits in SQLite at `$TONESEARCH_DATA_DIR/limits.sqlite3` (default `data/`, which is gitignored) and keys visitors by the first `X-Forwarded-For` entry. `application` is the WSGI alias that `passenger_wsgi.py` loads for cPanel/Passenger deployment.
+- `tonesearch/ai.py` talks to an OpenAI-compatible chat endpoint using stdlib `urlopen` and JSON-schema structured output, validated with pydantic. It is configured through `NAM_MIXER_AI_*` env vars; the provider is `cloudflare` (default), `custom` (https only), or `local` (localhost http only). Each setting can be provider-scoped, e.g. `NAM_MIXER_AI_CLOUDFLARE_MODEL`, with the unscoped name as a fallback. AI tuning also uses NAM Mixer's names (`MAX_TOKENS`, `TEMPERATURE`, `TIMEOUT_SECONDS`, `HISTORY_MESSAGES`, `HISTORY_MESSAGE_CHARS`, `RESEARCH_CHARS`, `MAX_REPLY_CHARS`, `MAX_EXPLANATION_CHARS`). Each value is clamped to `ai.TUNING_LIMITS` and carried on `AiConfig.tuning`. Replies don't have to come from a JSON-mode model. `_chat` tries `response_format` json_schema, then json_object, then no format at all, and remembers the first format each model accepts in `_FORMAT_TIER`. `_ask` adds an example object built from the schema (`_example`). `_decode` and `_repair` find and fix the JSON: fences, `<think>` blocks, trailing commas, Python literals and cut-off replies. `_normalise` maps field aliases and loose values onto the pydantic models. A thinking model that runs out of tokens raises a clear `AiError`. `_chat` asks for `stream=true` and reads server-sent events (`_read_stream`), so `TIMEOUT_SECONDS` limits each wait for data, not the whole reply; endpoints that ignore streaming are read as plain JSON, and ones that reject it are remembered in `_NO_STREAM`. Thinking models (by name, `_THINKING_NAMES`, or once a reply shows reasoning, `_THINKS`) get "think less" hints from `_HINT_TIERS` (`reasoning_effort`, `chat_template_kwargs.enable_thinking`); a 400 steps to the next hint dialect and ends with none, remembered in `_HINT_TIER`. `plan_tone`, `rank_packs` and `ask_about_pack` take a `deadline` (monotonic time); running past it raises an `AiError` that says whether the model was still thinking. Its errors are `AiError`, which is a subclass of `RuntimeError`.
+- `tonesearch/research.py` covers TONE3000 search, model listing, and `.nam` downloads (needs `TONE3000_API_KEY`, a `t3k_cs_` secret key). It also has optional DuckDuckGo web research via `ddgs`. `web_notes` strips filler words from the prompt (`_topic`), runs two gear-focused searches, and skips social, video and preset sites (`_SKIP_HOSTS`). Each ddgs search runs in a child process (`_ddgs_search` runs `_DDGS_CHILD` via `sys.executable`, with a hard timeout) because ddgs's native HTTP client, primp, can block forever while holding the GIL: on macOS two searches in threads at once froze the whole server. It fetches up to 8 pages in parallel through SSRF-guarded fetching (`_is_safe_public_host`, no redirects). `_extract_evidence` drops page chrome and Title Case menu lines, then keeps the 3 sentences with the highest gear and topic scores. `search` and `evidence` are injectable for tests.
+- `tonesearch/overrides.py` holds per-request visitor settings from the Settings dialog, sent as `X-AI-*` and `X-TONE3000-Key` headers and stored only in the browser. `app.before_request` activates them on every request. When a visitor sets `X-AI-Provider`, `ai.config()` uses only the visitor's values and never falls back to the server's secrets. Visitors can choose only `cloudflare` or `custom`, not `local`, and a custom URL must be a public https host with redirects refused. Visitors can send AI tuning as `X-AI-*` headers, but it only takes effect with their own provider. Visitors who bring their own keys skip the hourly limits.
+- The frontend is `templates/index.html` plus `static/app.js` and `static/style.css`, with no build step.
+
+`/api/search` runs this pipeline:
+1. Optionally gather web notes.
+2. `ai.plan_tone` produces a summary and search queries.
+3. `tone3000_search` runs for each query; results are deduplicated.
+4. The results are sorted by catalogue score and cut to 12, because small models stop scoring partway through long lists.
+5. `ai.rank_packs` assigns `ai_fit`/`ai_why`.
+
+Each search and pack question has an overall budget, `app.REQUEST_BUDGET_SECONDS` (85s, env `TONESEARCH_REQUEST_BUDGET_SECONDS`), because Cloudflare's proxy ends requests after about 100s. `plan_tone` must finish `RANKING_RESERVE_SECONDS` early, and ranking is skipped with a warning when under 8s remain. Failures in web research, TONE3000, or ranking become `warnings` rather than errors. Only a failure in `plan_tone` returns an error, a 503. Upstream failures use 503 rather than 502 because Cloudflare replaces the body of a 502 with its own page.
+
+Search filters (`research.DEFAULT_FILTERS`) are validated by `app._search_filters` and mapped to the API's separators by `research._search_params`: gears and tags use `_`, sizes use `-`, creators use `,`. The UI's "Apply to results" and tag clicks send `reuse_plan`, the previous summary and queries, which skips research and `plan_tone`. `/api/lookup/<makes|tags|creators>` provides autocomplete, cached for an hour in `LOOKUP_CACHE`, with its own `lookup` hourly limit. `/api/packs/<id>/download` returns TONE3000's short-lived whole-pack link. `/api/packs/<id>/models` takes an `architecture` parameter.
+
+`/api/pack_chat` answers questions about one pack with `ai.ask_about_pack`, passing the pack's model file names as context.
+
+## Conventions
+
+- Network functions accept an `opener=urlopen` parameter so tests can inject fakes; tests never hit the network. `tests/test_app.py` monkeypatches `app_module.DATA_DIR` to `tmp_path` and clears the `NAM_MIXER_AI_*` env vars.
+- Routes catch `RuntimeError` from the service modules and turn it into user-facing JSON errors. Services should raise `RuntimeError`/`AiError` with readable messages.
