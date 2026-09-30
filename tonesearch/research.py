@@ -416,6 +416,37 @@ DEFAULT_FILTERS = {"gears": [], "sizes": [], "makes": [], "tags": [], "creators"
                    "architecture": "2", "sort": "best-match", "calibrated": False, "verified": False}
 
 
+def validate_filters(raw) -> dict | None:
+    """Validated TONE3000 filters from the page or an MCP client, or None when anything is malformed."""
+    if raw is None:
+        return dict(DEFAULT_FILTERS)
+    if not isinstance(raw, dict):
+        return None
+    filters = dict(DEFAULT_FILTERS)
+    choices = {"gears": GEARS, "sizes": SIZES}
+    for name in ("gears", "sizes", "makes", "tags", "creators"):
+        values = raw.get(name, [])
+        if not isinstance(values, list) or len(values) > 10 or not all(isinstance(v, str) and 0 < len(v.strip()) <= 60 for v in values):
+            return None
+        values = list(dict.fromkeys(v.strip() for v in values))
+        if name in choices and not set(values) <= set(choices[name]):
+            return None
+        if any(sep in v for v in values for sep in ("_", ",")):  # the API's list separators
+            return None
+        filters[name] = values
+    for name, allowed in (("format", FORMATS), ("architecture", ARCHITECTURES), ("sort", SORTS)):
+        value = raw.get(name, filters[name])
+        if value not in allowed:
+            return None
+        filters[name] = value
+    for name in ("calibrated", "verified"):
+        value = raw.get(name, False)
+        if not isinstance(value, bool):
+            return None
+        filters[name] = value
+    return filters
+
+
 def _search_params(query: str, filters: dict) -> dict:
     params = {"query": query, "page": 1, "page_size": 20, "sort": filters["sort"], "format": filters["format"]}
     if filters["format"] == "nam" and filters["architecture"] != "any":
@@ -616,11 +647,10 @@ def tone3000_model_download(tone_id: int, model_id: int, *, architecture: str = 
 
 
 MAX_ZIP_FILES = 60
-_PACK_LINKS_FORBIDDEN = False  # set once TONE3000 refuses whole-pack links for this key type
 
 
 def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -> tuple[bytes, int]:
-    """Zip a pack's files on this server (TONE3000's whole-pack link needs a signed-in user, not a site key)."""
+    """Zip a pack's files on this server (TONE3000's whole-pack link is for approved partners with a user sign-in, not a secret key)."""
     kwargs = {"opener": opener} if opener else {}
     models = [m for m in _tone3000_models_payload(tone_id, architecture=architecture, **kwargs) if _model_link(m)]
     if not models:
@@ -642,30 +672,6 @@ def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -
             used.add(name.lower())
             archive.writestr(name, data)
     return buffer.getvalue(), len(models)
-
-
-def tone3000_pack_download_url(tone_id: int, *, opener=urlopen) -> str:
-    """A short-lived link for the whole pack; the visitor's browser downloads it straight from TONE3000."""
-    api_key = _require_tone3000_api_key(for_action="downloads")
-    request = Request(f"{TONE3000_BASE}/tones/{tone_id}/download",
-                      headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
-    global _PACK_LINKS_FORBIDDEN
-    if _PACK_LINKS_FORBIDDEN:
-        raise PermissionError("whole-pack links are not available to this key")
-    try:
-        with opener(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        if exc.code in (401, 403):
-            _PACK_LINKS_FORBIDDEN = True
-            raise PermissionError("whole-pack links are not available to this key") from exc
-        raise RuntimeError(f"TONE3000 pack download failed: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"TONE3000 pack download failed: {exc}") from exc
-    url = str((payload or {}).get("url") or "") if isinstance(payload, dict) else ""
-    if not url.startswith("https://"):
-        raise RuntimeError("TONE3000 did not provide a download link for this pack.")
-    return url
 
 
 LOOKUP_KINDS = {"makes": "makes", "tags": "tags", "creators": "users"}

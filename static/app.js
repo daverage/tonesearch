@@ -399,22 +399,17 @@
     try {
       button.textContent = "Preparing...";
       const response = await fetch(`api/packs/${encodeURIComponent(pack.id)}/download?architecture=${packArchitecture()}`, { headers: settingsHeaders() });
-      const isJson = (response.headers.get("Content-Type") || "").includes("json");
       if (!response.ok) {
-        const data = isJson ? await response.json().catch(() => ({})) : {};
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Download failed (${response.status})`);
       }
-      if (isJson) {
-        window.location.href = (await response.json()).url; // a short-lived TONE3000 link, downloaded directly
-      } else {
-        const link = el("a");
-        link.href = URL.createObjectURL(await response.blob());
-        link.download = `${pack.title.replace(/[^\w .()-]+/g, "_").trim() || "tone3000-pack"}.zip`;
-        document.body.append(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      }
+      const link = el("a");
+      link.href = URL.createObjectURL(await response.blob());
+      link.download = `${pack.title.replace(/[^\w .()-]+/g, "_").trim() || "tone3000-pack"}.zip`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
       announce(`Downloading ${pack.title}.`);
     } catch (error) {
       column.append(el("p", "t3ai-warning", error.message));

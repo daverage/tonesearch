@@ -311,32 +311,36 @@ def test_file_downloads_never_send_the_key_off_tone3000(monkeypatch):
     monkeypatch.setattr(research, "_is_safe_public_host", lambda host: True)
     models = {"data": [{"id": 7, "name": "Edge", "model_url": "https://storage.example/signed/7.nam?sig=x"}]}
     http = _Http({f"{research.TONE3000_BASE}/models": models, "https://storage.example/signed/7.nam": b"NAMDATA"})
+    overrides.activate({"tone3000_api_key": "t3k_cs_visitor"})
     data, name = research.tone3000_model_download(1, 7, opener=http)
     assert data == b"NAMDATA" and name == "Edge"
     assert ("https://storage.example/signed/7.nam?sig=x", False) in http.keyed
 
 
-def test_pack_download_falls_back_to_a_zip(client, monkeypatch):
+def test_pack_download_is_a_zip(client, monkeypatch):
     import io
     import zipfile
-    from urllib.error import HTTPError
     monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
     monkeypatch.setattr(research, "_is_safe_public_host", lambda host: True)
-    monkeypatch.setattr(research, "_PACK_LINKS_FORBIDDEN", False)
     models = {"data": [{"id": 1, "name": "Edge", "model_url": "https://s.example/1.nam"},
                        {"id": 2, "name": "Edge", "model_url": "https://s.example/2.nam"}]}
-    http = _Http({f"{research.TONE3000_BASE}/tones/5/download": HTTPError("u", 403, "Forbidden", {}, None),
-                  f"{research.TONE3000_BASE}/models": models, "https://s.example/1.nam": b"one", "https://s.example/2.nam": b"two"})
-    with pytest.raises(PermissionError):
-        research.tone3000_pack_download_url(5, opener=http)
-    assert research._PACK_LINKS_FORBIDDEN  # later requests skip straight to the zip
-
+    http = _Http({f"{research.TONE3000_BASE}/models": models, "https://s.example/1.nam": b"one", "https://s.example/2.nam": b"two"})
     real_zip = research.tone3000_pack_zip
-    monkeypatch.setattr(research, "tone3000_pack_zip", lambda tone_id, architecture: real_zip(tone_id, architecture=architecture, opener=http))
-    response = client.get("/api/packs/5/download")
+    monkeypatch.setattr(app_module, "tone3000_pack_zip", lambda tone_id, architecture: real_zip(tone_id, architecture=architecture, opener=http))
+    response = client.get("/api/packs/5/download", headers={"X-TONE3000-Key": "t3k_cs_visitor"})
     assert response.status_code == 200 and response.mimetype == "application/zip"
     archive = zipfile.ZipFile(io.BytesIO(response.data))
     assert sorted(archive.namelist()) == ["Edge (2).nam", "Edge.nam"] and archive.read("Edge.nam") == b"one"
+
+
+def test_a_visitors_own_key_is_always_used_for_downloads(client, monkeypatch):
+    monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
+    seen = []
+    monkeypatch.setattr(app_module, "tone3000_pack_zip",
+                        lambda tone_id, architecture: seen.append(research._require_tone3000_api_key(for_action="downloads")) or (b"z", 0))
+    client.get("/api/packs/5/download", headers={"X-TONE3000-Key": "t3k_cs_visitor"})
+    client.get("/api/packs/5/download")
+    assert seen == ["t3k_cs_visitor", "t3k_cs_server"]  # the site's key only for visitors without their own
 
 
 def _cfg():
@@ -460,6 +464,7 @@ def test_download_finds_the_file_under_the_listed_version(monkeypatch):
         if "/models?" in url:
             return _Response(pages["2"] if "architecture=2" in url else pages["any"])
         return _Bytes(b"NAM")
+    overrides.activate({"tone3000_api_key": "t3k_cs_visitor"})
     assert research.tone3000_model_download(1, 7, architecture="any", opener=opener) == (b"NAM", "PiezoV2")
 
 

@@ -14,9 +14,9 @@ from urllib.parse import quote
 from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import ai, overrides
+from tonesearch import ai, mcp_server, overrides
 from tonesearch import research
-from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_download_url,
+from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
                                  tone3000_search, web_notes)
 
 ROOT = Path(__file__).resolve().parent
@@ -47,7 +47,11 @@ LIMITS = {
     "chat": int(os.environ.get("TONESEARCH_CHATS_PER_HOUR", "40")),
     "files": int(os.environ.get("TONESEARCH_FILE_REQUESTS_PER_HOUR", "120")),
     "lookup": int(os.environ.get("TONESEARCH_LOOKUPS_PER_HOUR", "600")),
+    # The hosted MCP endpoint uses the caller's own TONE3000 key; these limits protect this server and the web search.
+    "mcp": int(os.environ.get("TONESEARCH_MCP_CALLS_PER_HOUR", "120")),
 }
+# MCP web research defaults to the website's search limit, so neither runs out before the other.
+LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", LIMITS["search"]))
 # Cloudflare's proxy ends any request after about 100 seconds, so a search or pack question must answer
 # before then. The AI calls share this budget; ranking is skipped rather than overrunning it.
 REQUEST_BUDGET_SECONDS = float(os.environ.get("TONESEARCH_REQUEST_BUDGET_SECONDS", "85"))
@@ -82,35 +86,7 @@ def _brings_own(*settings: str) -> bool:
     return all(overrides.get(name) for name in settings)
 
 
-def _search_filters(raw) -> dict | None:
-    """Validated TONE3000 filters from the page, or None when anything is malformed."""
-    if raw is None:
-        return dict(research.DEFAULT_FILTERS)
-    if not isinstance(raw, dict):
-        return None
-    filters = dict(research.DEFAULT_FILTERS)
-    choices = {"gears": research.GEARS, "sizes": research.SIZES}
-    for name in ("gears", "sizes", "makes", "tags", "creators"):
-        values = raw.get(name, [])
-        if not isinstance(values, list) or len(values) > 10 or not all(isinstance(v, str) and 0 < len(v.strip()) <= 60 for v in values):
-            return None
-        values = list(dict.fromkeys(v.strip() for v in values))
-        if name in choices and not set(values) <= set(choices[name]):
-            return None
-        if any(sep in v for v in values for sep in ("_", ",")):  # the API's list separators
-            return None
-        filters[name] = values
-    for name, allowed in (("format", research.FORMATS), ("architecture", research.ARCHITECTURES), ("sort", research.SORTS)):
-        value = raw.get(name, filters[name])
-        if value not in allowed:
-            return None
-        filters[name] = value
-    for name in ("calibrated", "verified"):
-        value = raw.get(name, False)
-        if not isinstance(value, bool):
-            return None
-        filters[name] = value
-    return filters
+_search_filters = research.validate_filters
 
 
 def _reused_plan(raw) -> dict | None:
@@ -178,6 +154,37 @@ def _unexpected_error(exc):
 def _apply_visitor_settings():
     # Set on every request so a reused worker thread never keeps a previous visitor's keys.
     overrides.activate(overrides.from_headers(request.headers))
+
+
+@app.post("/mcp")
+def mcp_endpoint():
+    """Hosted MCP (streamable HTTP, stateless, JSON replies). The local stdio server has no limits."""
+    message = request.get_json(silent=True)
+    if not isinstance(message, dict):
+        return jsonify(mcp_server._error(None, -32700, "Send one JSON-RPC message as JSON.")), 400
+    auth = request.headers.get("Authorization", "")
+    # Claude.ai and ChatGPT connectors can only take a URL, so ?key= is accepted when no header is sent.
+    key = (auth[7:] if auth.lower().startswith("bearer ")
+           else request.headers.get("X-TONE3000-Key") or request.args.get("key", "")).strip()
+    if message.get("method") == "tools/call":
+        name = (message.get("params") or {}).get("name")
+        if _over_limit("mcp") or (name == "web_research" and _over_limit("mcp_research")):
+            reply = mcp_server._error(message.get("id"), -32000, (
+                "This hour's limit for the hosted TONE Search MCP server has been reached. Try again later, "
+                "or run it locally without limits: https://github.com/daverage/tonesearch#use-it-from-your-ai-assistant-mcp"))
+            return jsonify(reply), 429
+    reply = mcp_server.handle(message, key[:200])
+    if reply is None:
+        return "", 202
+    return jsonify(reply)
+
+
+@app.get("/mcp")
+def mcp_stream():
+    return ("This is TONE Search's MCP server for AI assistants, not a web page. Add this URL to your assistant "
+            "as a Streamable HTTP MCP server with your own TONE3000 key: "
+            "https://github.com/daverage/tonesearch#use-it-from-your-ai-assistant-mcp", 405,
+            {"Content-Type": "text/plain; charset=utf-8", "Allow": "POST"})
 
 
 @app.get("/")
@@ -292,10 +299,7 @@ def api_pack_download(tone_id: int):
     if architecture not in research.ARCHITECTURES:
         return jsonify({"error": "Invalid NAM version."}), 400
     try:
-        try:
-            return jsonify({"url": tone3000_pack_download_url(tone_id)})
-        except PermissionError:  # site keys can't get TONE3000's whole-pack link: zip the files here instead
-            data, _count = research.tone3000_pack_zip(tone_id, architecture=architecture)
+        data, _count = tone3000_pack_zip(tone_id, architecture=architecture)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
     return _attachment(data, f"tone3000-pack-{tone_id}.zip", "application/zip")

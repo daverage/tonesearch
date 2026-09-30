@@ -19,6 +19,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
   - [Option B: A local model with Ollama](#option-b-a-local-model-with-ollama)
   - [Option C: Any OpenAI-compatible API](#option-c-any-openai-compatible-api)
 - [Using the app](#using-the-app)
+- [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Configuration reference](#configuration-reference)
 - [Choosing a model](#choosing-a-model)
 - [Deploying](#deploying)
@@ -190,6 +191,133 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
 
 ---
 
+## Use it from your AI assistant (MCP)
+
+TONE Search also runs as an [MCP](https://modelcontextprotocol.io) server, so assistants such as Claude, ChatGPT, Cursor and Claude Code can use it. Your assistant does the AI work: it plans the searches and ranks the packs. The server only fetches data and calls no AI provider.
+
+There are two ways to use it:
+
+| | Hosted | Local |
+|---|---|---|
+| Setup | Paste a URL | Download the code and run Python |
+| Limits | 120 tool calls and 12 web research calls per hour | None |
+| Works with | Claude.ai, ChatGPT, Claude Desktop, Claude Code, Cursor | Claude Desktop, Claude Code, Cursor and other local MCP clients |
+
+### Step 1: get your TONE3000 key (required)
+
+Both versions need **your own** TONE3000 secret key. The server never uses the site's key.
+
+1. Sign in at [tone3000.com](https://www.tone3000.com) and open your account's API settings.
+2. Create a **secret** key. It starts with `t3k_cs_`. Keys starting `t3k_pk_` (publishable keys) won't work.
+3. Keep it private. You can delete it and make a new one at any time.
+
+### Step 2a: hosted (quickest)
+
+The server address is `https://marczewski.me.uk/tonesearch/mcp`. Opening it in a browser only shows a short note; it's meant for AI assistants.
+
+**Claude.ai or ChatGPT** (these only take a URL):
+
+1. Claude.ai: **Settings → Connectors → Add custom connector**. ChatGPT: **Settings → Connectors → Create**, which needs developer mode turned on.
+2. Name it `TONE Search` and paste your key into the end of this URL:
+   ```
+   https://marczewski.me.uk/tonesearch/mcp?key=t3k_cs_YOURKEY
+   ```
+3. Save, then start a new chat with the connector turned on.
+
+Keys in URLs can appear in server and proxy logs. Where your client can send a header, use the header instead.
+
+**Claude Code** (sends the key as a header):
+
+```bash
+claude mcp add --transport http tonesearch https://marczewski.me.uk/tonesearch/mcp \
+  --header "Authorization: Bearer t3k_cs_YOURKEY"
+```
+
+**Claude Desktop, Cursor and other clients with a JSON config:**
+
+```json
+{
+  "mcpServers": {
+    "tonesearch": {
+      "type": "http",
+      "url": "https://marczewski.me.uk/tonesearch/mcp",
+      "headers": { "Authorization": "Bearer t3k_cs_YOURKEY" }
+    }
+  }
+}
+```
+
+If your client doesn't support `headers`, use the `?key=` URL above instead.
+
+Each IP address gets 120 tool calls an hour, and as many web research calls as the website allows searches (12 by default). For no limits, run it locally.
+
+### Step 2b: local (unlimited)
+
+You need Python 3.10 or newer.
+
+1. Download the code and install its requirements:
+   ```bash
+   git clone https://github.com/daverage/tonesearch.git
+   cd tonesearch
+   python3 -m pip install -r requirements.txt
+   ```
+2. Check that it starts. It should wait silently for input; press Ctrl+C to stop it:
+   ```bash
+   TONE3000_API_KEY=t3k_cs_YOURKEY python3 -m tonesearch.mcp_server
+   ```
+   If it exits straight away with a message about your key, the key is missing or isn't a `t3k_cs_` secret key.
+3. Add it to your assistant.
+
+   **Claude Code**, run from the `tonesearch` folder:
+   ```bash
+   claude mcp add tonesearch --env TONE3000_API_KEY=t3k_cs_YOURKEY -- python3 -m tonesearch.mcp_server
+   ```
+
+   **Claude Desktop** (**Settings → Developer → Edit Config**), **Cursor** (`~/.cursor/mcp.json`) and other clients. Replace `/full/path/to/tonesearch` with the folder you cloned. On Windows, use `python` instead of `python3`.
+   ```json
+   {
+     "mcpServers": {
+       "tonesearch": {
+         "command": "python3",
+         "args": ["-m", "tonesearch.mcp_server"],
+         "env": {
+           "TONE3000_API_KEY": "t3k_cs_YOURKEY",
+           "PYTHONPATH": "/full/path/to/tonesearch"
+         }
+       }
+     }
+   }
+   ```
+   `PYTHONPATH` tells Python where the code is, because desktop apps don't start in the project folder. If the app can't find `python3`, use its full path. `which python3` shows it on macOS and Linux.
+4. Restart the app completely.
+
+### Step 3: check it works
+
+Ask your assistant something like: *"Use TONE Search to find NAM captures for Gilmour's Comfortably Numb solo."*
+
+It should call the tools: usually `web_research`, then a few `search_packs` calls. It then ranks the packs itself. Most apps let you expand each tool call to see what it sent and got back. In Claude Code, `/mcp` shows whether the server is connected.
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `web_research` | Web notes about the gear behind a described tone (your key is checked with TONE3000 first) |
+| `search_packs` | TONE3000 search for one gear query, with filters |
+| `lookup` | Exact slugs for the makes, tags and creators filters |
+| `list_pack_models` | The model files in a pack |
+| `download_link` | The pack's TONE3000 page, to download it from |
+
+The `find_tone` prompt walks the assistant through the full research → search → rank workflow.
+
+### Troubleshooting
+
+- **"needs your own TONE3000 secret key":** the key is missing, or it's a `t3k_pk_` key. In a `?key=` URL, check there are no spaces.
+- **"This hour's limit … has been reached":** wait an hour, or run it locally.
+- **A message saying the address isn't a web page:** you opened the URL in a browser, or your client is using the old SSE transport. Choose **Streamable HTTP**.
+- **Local server doesn't appear:** check the `PYTHONPATH` folder and your Python path, then fully restart the app. Claude Desktop's logs are under **Settings → Developer**.
+
+---
+
 ## Configuration reference
 
 All settings are environment variables.
@@ -229,6 +357,8 @@ Visitors using their own AI provider can set the same values under **Settings �
 |---|---:|---|
 | `TONE3000_API_KEY` | none | The server's TONE3000 secret key (`t3k_cs_…`) |
 | `TONESEARCH_SEARCHES_PER_HOUR` | 12 | Searches per visitor per hour (0 = no limit) |
+| `TONESEARCH_MCP_CALLS_PER_HOUR` | 120 | Hosted MCP tool calls per IP per hour (0 = no limit) |
+| `TONESEARCH_MCP_RESEARCH_PER_HOUR` | same as searches | Hosted MCP `web_research` calls per IP per hour |
 | `TONESEARCH_CHATS_PER_HOUR` | 40 | Pack questions per visitor per hour |
 | `TONESEARCH_FILE_REQUESTS_PER_HOUR` | 120 | File lists and downloads per visitor per hour |
 | `TONESEARCH_LOOKUPS_PER_HOUR` | 600 | Filter autocomplete lookups per visitor per hour |
