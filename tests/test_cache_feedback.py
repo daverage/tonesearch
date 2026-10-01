@@ -226,6 +226,7 @@ def test_shops_and_generic_words_are_not_research():
     assert research._skip_source("https://www.gumtree.com/bass-amps/uk")
     assert research._skip_source("https://www.bassbros.co.uk/bass-pedals")
     assert research._skip_source("https://example.com/shop/darkglass-b7k")
+    assert not research._skip_source("https://www.roland.com/global/products/jc-40/")  # a maker's spec page
     assert not research._skip_source("https://geargods.net/rigged/peripherys-nolly-getgood-bass-rig-rundown/")
     listing = "<title>Bass amps</title><p>Great bass amp head and cab for sale, collection only, cash on pickup.</p>"
     assert research._extract_evidence(listing, "Periphery bass") == ""

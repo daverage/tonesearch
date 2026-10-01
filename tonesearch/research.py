@@ -179,8 +179,9 @@ _SKIP_HOSTS = ("tiktok.com", "youtube.com", "youtu.be", "instagram.com", "facebo
                "gumtree.", "craigslist.", "preloved.", "for-sale.", "gear4music.", "thomann.", "sweetwater.com",
                "guitarcenter.com", "musiciansfriend.com", "andertons.co.uk", "bassbros.co.uk", "pmtonline.co.uk",
                "dv247.", "zzounds.com", "kijiji.", "marktplaats.", "olx.", "etsy.com", "walmart.com")
-# Listing and product pages on any site: "/for-sale/", "/shop/", "/products/", "/classifieds/".
-_LISTING_PATH = re.compile(r"/(for-?sale|shop|store|products?|classifieds?|buy|cart|category|categories|listings?)(/|$|\?|-)",
+# Listing pages on any site: "/for-sale/", "/shop/", "/classifieds/". Not "/products/": makers' spec pages
+# (roland.com/global/products/jc-40/) live there, and known shops are skipped by host instead.
+_LISTING_PATH = re.compile(r"/(for-?sale|shop|store|classifieds?|buy|cart|category|categories|listings?)(/|$|\?|-)",
                            re.IGNORECASE)
 # Words too common to tell one request from another: "bass amps for sale" mustn't count as evidence about
 # "Periphery bass", so evidence needs the request's distinctive words (artist, song, album).
