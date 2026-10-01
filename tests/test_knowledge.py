@@ -120,3 +120,15 @@ def test_a_broken_library_never_stops_research(monkeypatch, tmp_path):
     assert knowledge.find(missing, "SRV") is None and knowledge.save(missing, "SRV", NOTES) is None
     monkeypatch.setattr(mcp_server, "library_path", lambda: missing)
     assert mcp_server.web_research("SRV Texas Flood", notes=lambda text: NOTES) == NOTES
+
+
+def test_admin_actions_return_to_the_same_filter(monkeypatch, db):
+    monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "secret")
+    entry_id = knowledge.save(db, "Texas Flood SRV", NOTES)
+    headers = {**_auth("secret"), "Origin": "http://localhost"}
+    client = app_module.app.test_client()
+    assert b'name="filter_status" value="new"' in client.get("/admin?status=new&q=flood", headers=headers).data
+    form = {"topic": "Texas Flood SRV", "notes": NOTES, "gear": "", "action": "approve",
+            "filter_q": "flood", "filter_status": "new"}
+    location = client.post(f"/admin/entries/{entry_id}", data=form, headers=headers).headers["Location"]
+    assert "q=flood" in location and "status=new" in location and "message=" in location

@@ -88,6 +88,8 @@
 
     {% for entry in entries %}
     <form class="entry {% if entry.status == 'flagged' %}entry-flagged{% endif %}" method="post" action="admin/entries/{{ entry.id }}" id="entry-{{ entry.id }}">
+      <input type="hidden" name="filter_q" value="{{ q }}">
+      <input type="hidden" name="filter_status" value="{{ status }}">
       <div class="entry-head">
         <strong>#{{ entry.id }} · {{ entry.topic }}</strong>
         <span class="status status-{{ entry.status }}">{{ entry.status }}{% if entry.flags %} · {{ entry.flags }} report{{ 's' if entry.flags != 1 }}{% endif %} · used {{ entry.uses }}×</span>

@@ -279,7 +279,10 @@ def admin_entry(entry_id: int):
             message = f"Saved entry {entry_id}."
         except ValueError as exc:
             message = f"Entry {entry_id} not saved: {exc}"
-    return redirect(f"{request.script_root}/admin?{urlencode({'message': message})}", 303)
+    # Back to the same filtered list, so reviewing (say) every flagged entry doesn't mean filtering again each time.
+    keep = {"q": form.get("filter_q", "")[:100], "status": form.get("filter_status", "")}
+    keep = {name: value for name, value in keep.items() if value}
+    return redirect(f"{request.script_root}/admin?{urlencode({**keep, 'message': message})}", 303)
 
 
 @app.get("/")
