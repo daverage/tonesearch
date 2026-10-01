@@ -92,3 +92,35 @@ def test_mcp_save_gear_and_saved_answers_carry_confidence():
     assert [g["confidence"] for g in gear] == ["confirmed", "artist"]
     again = mcp_server.web_research("Periphery bass", notes=lambda text: pytest.fail("reuse the library"))
     assert "Darkglass B7K (confirmed)" in again and "Cali76 (artist)" in again
+
+
+def test_requirement_requests_keep_candidates_that_fit_and_label_them():
+    content = json.dumps({"summary": "A clean stereo combo for gigs.", "advice": [], "intent": "product_recommendation",
+                          "requirements": ["combo with speakers", "stereo", "clean headroom for pedals"],
+                          "search_queries": ["Roland JC-40", "Fender Deluxe Reverb"],
+                          "gear": [{"kind": "amp", "name": "Roland JC-40", "confidence": "confirmed"},
+                                   {"kind": "amp", "name": "Fender Deluxe Reverb", "role": "mono", "confidence": "artist"},
+                                   {"kind": "other", "name": "DSM Humboldt Simplifier MKII", "confidence": "suggested"},
+                                   {"kind": "effect", "name": "Ibanez Tube Screamer", "confidence": "artist"},
+                                   {"kind": "cab", "name": "Celestion A-Type", "confidence": "artist"}]})
+    plan = ai.plan_tone("stereo amp cab combo for gigging, a good pedal platform", opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": content}}]}))
+    assert plan["intent"] == "requirements" and plan["requirements"][1] == "stereo"
+    assert [g["name"] for g in plan["gear"]] == ["Roland JC-40", "Fender Deluxe Reverb", "DSM Humboldt Simplifier MKII"]
+    assert plan["search_queries"] == ["Roland JC-40"]  # meets every requirement, so it's what gets searched
+    summary = ai.gear_summary(plan)
+    assert "Requirements (score packs of gear that breaks a hard one below 40): combo with speakers" in summary
+    assert "Meets every requirement: Roland JC-40." in summary and "Partial match" in summary
+
+
+def test_requirement_requests_research_specs_not_rigs(monkeypatch):
+    monkeypatch.setattr(research.time, "sleep", lambda seconds: None)
+    asked = []
+    with pytest.raises(RuntimeError):
+        research.web_notes("best stereo combo for gigging with pedals", search=lambda q, *a, **k: asked.append(q) or [])
+    endings = {q.rsplit(" ", 1)[1] for q in asked}
+    assert {"specifications", "review"} <= endings and not any("guitarist" in q for q in asked)
+    asked.clear()
+    with pytest.raises(RuntimeError):
+        research.web_notes("Periphery bass tone", search=lambda q, *a, **k: asked.append(q) or [])
+    assert asked and all("bassist" in q for q in asked if q != "Periphery bass")  # the last try is the bare topic

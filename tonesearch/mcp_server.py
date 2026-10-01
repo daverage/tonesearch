@@ -68,9 +68,13 @@ def _saved_answer(description: str) -> str:
     lines = [f"TONE Search's saved answer for \"{answer.get('topic', words)}\" "
              f"({time.strftime('%d %b %Y', time.gmtime(created))}; packs ranked by the site's AI, then players' votes):",
              f"Summary: {plan.get('summary', '')}"]
+    if plan.get("requirements"):
+        lines.append("Requirements: " + "; ".join(plan["requirements"]))
     gear = "; ".join(_gear_line(g) for g in plan.get("gear") or [])
     if gear:
-        lines.append(f"Gear (confidence: confirmed for this recording / artist's gear, era unconfirmed / suggested): {gear}")
+        legend = ai.CONFIDENCE_LABELS.get(plan.get("intent"), ai.CONFIDENCE_LABELS["artist"])
+        lines.append(f"Gear (confidence: " + " / ".join(f"{level} = {legend[level].lower()}" for level in ai.CONFIDENCE)
+                     + f"): {gear}")
     if answer.get("queries"):
         lines.append("Catalogue searches used: " + ", ".join(answer["queries"]))
     lines.append("Ranked packs:")

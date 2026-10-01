@@ -19,8 +19,14 @@
   const state = { history: [], goal: "", busy: false, plan: null, searchedFilters: null, log: [], packChats: new Map() };
   const GEAR_LABELS = { amp: "Amp head", "amp-cab": "Full rig", amp_cab: "Full rig", "full-rig": "Full rig", pedal: "Pedal", outboard: "Outboard", ir: "IR" };
   // How sure the research is that the gear made this tone; unlabelled (older) gear counts as the artist's.
-  const CONFIDENCE_LABELS = { confirmed: "(confirmed)", artist: "(artist's gear, era unconfirmed)", suggested: "(suggestion)" };
-  const confidence = (g) => (g.confidence in CONFIDENCE_LABELS ? g.confidence : "artist");
+  // Labels depend on what was asked: an artist's tone, gear that meets stated needs, or a described sound.
+  const CONFIDENCE_LABELS = {
+    artist: { confirmed: "(confirmed)", artist: "(artist's gear, era unconfirmed)", suggested: "(suggestion)" },
+    requirements: { confirmed: "(meets every requirement)", artist: "(partial match)", suggested: "(alternative approach)" },
+    sound: { confirmed: "(fits the sound)", artist: "(likely fits)", suggested: "(suggestion)" },
+  };
+  const confidence = (g) => (["confirmed", "artist", "suggested"].includes(g.confidence) ? g.confidence : "artist");
+  const confidenceLabel = (plan, g) => (CONFIDENCE_LABELS[plan.intent] || CONFIDENCE_LABELS.artist)[confidence(g)];
   const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", other: "Other" };
 
   const el = (tag, className, text) => {
@@ -190,6 +196,14 @@
     });
     head.append(toggle);
     brief.append(head, el("p", "t3ai-summary", plan.summary));
+    if (plan.requirements && plan.requirements.length) {
+      const needs = el("div", "t3ai-needs");
+      needs.append(el("span", "t3ai-gear-kind", "What you asked for"));
+      const list = el("ul");
+      plan.requirements.forEach((need) => list.append(el("li", null, need)));
+      needs.append(list);
+      brief.append(needs);
+    }
     if (plan.gear.length) {
       const groups = {};
       plan.gear.forEach((g) => { (groups[g.kind] ||= []).push(g); });
@@ -202,7 +216,7 @@
           if (g.role) { chip.title = g.role; chip.append(el("span", "visually-hidden", `: ${g.role}`)); } // the tooltip is mouse-only
           const level = confidence(g);
           chip.dataset.confidence = level;
-          chip.append(el("span", "t3ai-chip-note", ` ${CONFIDENCE_LABELS[level]}`));
+          chip.append(el("span", "t3ai-chip-note", ` ${confidenceLabel(plan, g)}`));
           row.append(chip);
         });
         gear.append(row);
@@ -820,7 +834,7 @@
         Object.keys(KIND_LABELS).forEach((kind) => {
           const items = data.plan.gear.filter((g) => g.kind === kind);
           if (!items.length) return;
-          const names = items.map((g) => `${md(g.name)} ${CONFIDENCE_LABELS[confidence(g)]}${g.role ? `: ${md(g.role)}` : ""}`);
+          const names = items.map((g) => `${md(g.name)} ${confidenceLabel(data.plan, g)}${g.role ? `: ${md(g.role)}` : ""}`);
           out.push(`**${KIND_LABELS[kind]}**`, "", ...names.map((n) => `- ${n}`), "");
         });
       }

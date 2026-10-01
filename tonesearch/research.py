@@ -157,6 +157,10 @@ _GEAR_WORDS = {
     "bogner", "friedman", "laney", "matchless", "muff", "klon", "prs", "ibanez", "schecter", "compressor", "chorus",
     "flanger", "phaser", "darkglass", "sansamp", "svt", "preamp", "bass", "di",
 }
+# Words that ask for gear meeting needs rather than an artist's tone; two or more change what research looks for.
+_NEEDS = re.compile(r"\b(best|recommend\w*|looking for|suggest\w*|which|gigg?ing|gigs?|stereo|headroom|watts?|combo|"
+                    r"budget|cheap|affordable|under [£$€]?\d+|lightweight|portable|pedal platform|practice|home use|"
+                    r"bedroom|loud enough|small venues?)\b", re.IGNORECASE)
 _BASS = re.compile(r"\bbass(ist|ists)?\b", re.IGNORECASE)
 _GEAR_PHRASES = ("les paul", "bad cat", "pro co rat", "big muff", "tube screamer", "dual rectifier")
 # Words that support gear evidence but don't name any equipment ("recorded in the studio").
@@ -183,7 +187,9 @@ _LISTING_PATH = re.compile(r"/(for-?sale|shop|store|products?|classifieds?|buy|c
 _NOT_TOPIC = {"bass", "guitar", "guitars", "amp", "amps", "tone", "tones", "sound", "sounds", "rig", "gear",
               "pedal", "pedals", "solo", "riff", "live", "studio", "album", "song", "band", "the", "and"}
 MAX_SOURCES = 4
-EVIDENCE_CHARS = 700
+EVIDENCE_CHARS = 1_000  # per source: 4 sources and their titles and links stay under the AI's 5,000-character research limit
+EVIDENCE_SENTENCES = 5
+_REFERS_BACK = re.compile(r"(he|she|they|their|his|her|it|its|this|these|that|those|both)\b", re.IGNORECASE)
 
 
 def _topic(query: str) -> str:
@@ -261,20 +267,31 @@ def _extract_evidence(html: str, topic: str, forum: bool = False) -> str:
     text = "".join(parser.parts)
     opening = set(re.findall(r"[a-z0-9']+", text[:3000].lower()))  # title and first lines say what a page is about
     page_on_topic = not forum and len(opening & topic_words) >= min(2, len(topic_words))
-    candidates, seen = [], set()
+    sentences, scores, seen = [], [], set()  # every sentence in page order, with its evidence score
     for block in text.split("\n"):
         block = re.sub(r"\s+", " ", block).strip()
         for sentence in re.split(r"(?<=[.!?])\s+", block):
             sentence = sentence.strip()
-            if sentence.lower() in seen:  # pages often repeat a line (summary box + body)
+            if not sentence or sentence.lower() in seen:  # pages often repeat a line (summary box + body)
                 continue
-            if forum and _OWN_RIG.search(sentence):
-                continue
-            if sentence[-1:] in ".!?\"”)" and (score := _sentence_score(sentence, topic_words, page_on_topic)):
-                seen.add(sentence.lower())
-                candidates.append((score, len(candidates), sentence))
-    best = sorted(sorted(candidates, reverse=True)[:3], key=lambda c: c[1])
-    return " ".join(c[2] for c in best)[:EVIDENCE_CHARS]
+            seen.add(sentence.lower())
+            score = 0
+            if not (forum and _OWN_RIG.search(sentence)) and sentence[-1:] in ".!?\"”)":
+                score = _sentence_score(sentence, topic_words, page_on_topic)
+            sentences.append(sentence)
+            scores.append(score)
+    best = sorted(sorted(((s, -i) for i, s in enumerate(scores) if s), reverse=True)[:EVIDENCE_SENTENCES])
+    chosen = {-i for _, i in best}
+    for i in list(chosen):
+        # "He used a Bad Cat" means nothing without the sentence that says who he is.
+        if i > 0 and _REFERS_BACK.match(sentences[i]):
+            chosen.add(i - 1)
+    extract = ""
+    for i in sorted(chosen):
+        if len(extract) + len(sentences[i]) + 1 > EVIDENCE_CHARS:
+            break  # whole sentences only
+        extract = f"{extract} {sentences[i]}".strip()
+    return extract
 
 
 def _page_evidence(href: str, topic: str) -> str:
@@ -371,8 +388,11 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     deadline = time.monotonic() + RESEARCH_SEARCH_SECONDS
     # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
     # unrelated shops; these two found forums, interviews and gear write-ups instead.
-    player = "bassist bass" if _BASS.search(query) else "guitarist"  # a bass request must not find guitar rigs
-    queries = (f"{topic} {player} amp pedals gear used", f"{topic} {player} interview amplifier gear")
+    if len(_NEEDS.findall(query)) >= 2:  # "a stereo combo for gigging": product specs, not an artist's rig
+        queries = (f"{topic} specifications", f"{topic} review")
+    else:
+        player = "bassist bass" if _BASS.search(query) else "guitarist"  # a bass request must not find guitar rigs
+        queries = (f"{topic} {player} amp pedals gear used", f"{topic} {player} interview amplifier gear")
     with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
         outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
     if not any(found for found, _ in outcomes):

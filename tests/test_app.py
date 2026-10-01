@@ -745,3 +745,16 @@ def test_forum_posts_about_a_posters_own_rig_are_not_evidence():
     # Not a forum: an interview quote on a page about the artist still counts.
     interview = "<title>Periphery bass rig</title><p>We had a Darkglass B7K preamp and a Cali76 compressor pedal in the studio.</p>"
     assert "Darkglass" in research._extract_evidence(interview, "Periphery bass")
+
+
+def test_evidence_keeps_who_a_sentence_is_about():
+    page = ("<title>Porcupine Tree rig</title><p>Steven Wilson led Porcupine Tree through the In Absentia sessions."
+            " He played a Bad Cat Hot Cat amp and a PRS guitar through a Marshall cab.</p>")
+    found = research._extract_evidence(page, "Porcupine Tree In Absentia")
+    assert found.startswith("Steven Wilson led Porcupine Tree") and "Bad Cat" in found
+
+
+def test_research_is_cut_at_whole_sources():
+    notes = "- a: one. (https://a)\n- b: two. (https://b)\n- c: three. (https://c)"
+    assert ai._whole_lines(notes, 30) == "- a: one. (https://a)"
+    assert ai._whole_lines(notes, 999) == notes
