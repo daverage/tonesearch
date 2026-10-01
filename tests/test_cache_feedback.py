@@ -199,10 +199,13 @@ def test_mcp_says_whether_a_saved_answer_was_checked(calls):
 
 def test_mcp_save_gear_fills_an_empty_gear_list_once(monkeypatch):
     db = app_module._library()
-    mcp_server.web_research("Periphery bass Nolly", notes=lambda text: NOTES)
+    rundown = "- Rig rundown: Nolly runs a Darkglass B7K preamp and an Origin Effects Cali76 compressor. (https://x.example)"
+    mcp_server.web_research("Periphery bass Nolly", notes=lambda text: rundown)
     gear = [{"kind": "effect", "name": "Darkglass Microtubes B7K", "role": "drive for the highs"},
-            {"kind": "effect", "name": "Compressor"}, {"kind": "weird", "name": "Origin Effects Cali76"}]
-    assert mcp_server.save_gear("periphery bass nolly", gear).startswith("Saved 2 gear items")
+            {"kind": "effect", "name": "Compressor"}, {"kind": "weird", "name": "Origin Effects Cali76"},
+            {"kind": "guitar", "name": "Dingwall NG-2"}]
+    saved = mcp_server.save_gear("periphery bass nolly", gear)
+    assert saved.startswith("Saved 2 gear items") and "Not saved, because the notes don't name them: Dingwall NG-2" in saved
     entry = knowledge.find(db, "Periphery bass Nolly")
     assert [g["name"] for g in entry["gear"]] == ["Darkglass Microtubes B7K", "Origin Effects Cali76"]
     assert entry["gear"][1]["kind"] == "other"
@@ -211,3 +214,20 @@ def test_mcp_save_gear_fills_an_empty_gear_list_once(monkeypatch):
     mcp_server._CHECKED_KEYS[__import__("hashlib").sha256(b"t3k_cs_user").hexdigest()] = time.time()
     result = mcp_server.call_tool("save_gear", {"description": "x", "gear": [{"kind": "effect", "name": "Delay"}]}, "t3k_cs_user")
     assert result["isError"] and "not categories" in result["content"][0]["text"]
+
+
+def test_save_gear_refuses_gear_the_research_never_mentions():
+    mcp_server.web_research("Periphery bass", notes=lambda text: "- Shop: bass amps in stock now. (https://x.example)")
+    reply = mcp_server.save_gear("Periphery bass", [{"kind": "amp", "name": "Ampeg SVT"}])
+    assert reply.startswith("Nothing saved") and "rate_result" in reply
+
+
+def test_shops_and_generic_words_are_not_research():
+    assert research._skip_source("https://www.gumtree.com/bass-amps/uk")
+    assert research._skip_source("https://www.bassbros.co.uk/bass-pedals")
+    assert research._skip_source("https://example.com/shop/darkglass-b7k")
+    assert not research._skip_source("https://geargods.net/rigged/peripherys-nolly-getgood-bass-rig-rundown/")
+    listing = "<title>Bass amps</title><p>Great bass amp head and cab for sale, collection only, cash on pickup.</p>"
+    assert research._extract_evidence(listing, "Periphery bass") == ""
+    assert "Darkglass" in research._extract_evidence(
+        "<p>Periphery records bass with a Darkglass B7K preamp and a compressor pedal.</p>", "Periphery bass")

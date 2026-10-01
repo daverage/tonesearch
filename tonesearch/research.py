@@ -170,7 +170,18 @@ _FILLER_WORDS = {
 }
 # Social, video and preset-sharing sites rarely say what the artist actually used.
 _SKIP_HOSTS = ("tiktok.com", "youtube.com", "youtu.be", "instagram.com", "facebook.com", "pinterest.", "twitter.com",
-               "x.com", "tone.fender.com", "line6.com", "spotify.com", "apple.com", "amazon.", "ebay.", "reverb.com")
+               "x.com", "tone.fender.com", "line6.com", "spotify.com", "apple.com", "amazon.", "ebay.", "reverb.com",
+               # Shops and classifieds list gear for sale, never what an artist used.
+               "gumtree.", "craigslist.", "preloved.", "for-sale.", "gear4music.", "thomann.", "sweetwater.com",
+               "guitarcenter.com", "musiciansfriend.com", "andertons.co.uk", "bassbros.co.uk", "pmtonline.co.uk",
+               "dv247.", "zzounds.com", "kijiji.", "marktplaats.", "olx.", "etsy.com", "walmart.com")
+# Listing and product pages on any site: "/for-sale/", "/shop/", "/products/", "/classifieds/".
+_LISTING_PATH = re.compile(r"/(for-?sale|shop|store|products?|classifieds?|buy|cart|category|categories|listings?)(/|$|\?|-)",
+                           re.IGNORECASE)
+# Words too common to tell one request from another: "bass amps for sale" mustn't count as evidence about
+# "Periphery bass", so evidence needs the request's distinctive words (artist, song, album).
+_NOT_TOPIC = {"bass", "guitar", "guitars", "amp", "amps", "tone", "tones", "sound", "sounds", "rig", "gear",
+              "pedal", "pedals", "solo", "riff", "live", "studio", "album", "song", "band", "the", "and"}
 MAX_SOURCES = 4
 EVIDENCE_CHARS = 700
 
@@ -182,8 +193,16 @@ def _topic(query: str) -> str:
     return " ".join(kept) or query.strip()
 
 
+def _topic_words(topic: str) -> set:
+    words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
+    return (words - _NOT_TOPIC) or words  # "bass tone" alone has nothing more distinctive to go on
+
+
 def _skip_source(href: str) -> bool:
-    host = (urlparse(href).hostname or "").lower()
+    parsed = urlparse(href)
+    host = (parsed.hostname or "").lower()
+    if _LISTING_PATH.search(parsed.path):
+        return True
     return not host or any(host == pattern or host.endswith("." + pattern) or (pattern.endswith(".") and pattern in host)
                            for pattern in _SKIP_HOSTS)
 
@@ -229,7 +248,7 @@ def _extract_evidence(html: str, topic: str, forum: bool = False) -> str:
     """The best few sentences of a page about the requested rig, in page order."""
     parser = _PageText()
     parser.feed(html)
-    topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
+    topic_words = _topic_words(topic)
     text = "".join(parser.parts)
     opening = set(re.findall(r"[a-z0-9']+", text[:3000].lower()))  # title and first lines say what a page is about
     page_on_topic = not forum and len(opening & topic_words) >= min(2, len(topic_words))
@@ -368,7 +387,7 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     candidates = results[:10]  # several pages have no usable text (blocked or built by JavaScript)
     with ThreadPoolExecutor(max_workers=len(candidates) or 1) as pool:
         extracts = list(pool.map(lambda r: evidence(str(r.get("href", "")).strip(), topic), candidates))
-    topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
+    topic_words = _topic_words(topic)
     notes = []
     for result, extract in zip(candidates, extracts):
         title = str(result.get("title", "")).strip()

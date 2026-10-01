@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,8 @@ You do the thinking; these tools fetch data. Workflow:
 1. Always call web_research first with the user's description, even if you know the gear: when TONE Search
    already has an answer for this tone it returns it instantly (brief, gear and packs ranked by players' votes).
    Otherwise it researches the actual rig (amp, pedals, cab) on the web. Base your queries on what it finds.
-   If it returned fresh research notes, call save_gear with the specific products the artist used.
+   If it returned fresh research notes, call save_gear with the products those notes say the artist used.
+   If the notes are poor or off-topic, call rate_result with rating 'bad' instead.
 2. Plan 1-3 short catalogue queries naming gear, e.g. "Marshall Plexi" or "Klon Centaur", not song titles.
    Use lookup to find exact make, tag or creator slugs before using them as filters.
 3. Call search_packs for each query and merge the results by id.
@@ -162,8 +164,23 @@ def save_gear(description: str, gear: list) -> str:
         return "There's no saved research for this tone yet: call web_research first."
     if entry["gear"]:
         return "This research already has a gear list, so it was left as it is."
-    knowledge.add_gear(library_path(), entry["id"], items)
-    return f"Saved {len(items)} gear item{'s' if len(items) != 1 else ''} with the research."
+    # Only gear the research itself names: the library records what sources say, not what an assistant recalls.
+    notes = entry["notes"].lower()
+    supported = [g for g in items if _named_in(g["name"], notes)]
+    skipped = [g["name"] for g in items if g not in supported]
+    if not supported:
+        return ("Nothing saved: none of these appear in the research notes. Only save gear the notes name. "
+                "If the research is poor, call rate_result with rating 'bad' instead.")
+    knowledge.add_gear(library_path(), entry["id"], supported)
+    return (f"Saved {len(supported)} gear item{'s' if len(supported) != 1 else ''} with the research."
+            + (f" Not saved, because the notes don't name them: {', '.join(skipped)}." if skipped else ""))
+
+
+def _named_in(name: str, notes: str) -> bool:
+    """True when the notes mention the product: its model word (B7K, Cali76) or two of its other words."""
+    words = [w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) > 2 or any(c.isdigit() for c in w)]
+    found = [w for w in words if re.search(rf"\b{re.escape(w)}\b", notes)]
+    return any(any(c.isdigit() for c in w) for w in found) or len(found) >= min(2, len(words))
 
 
 def rate_result(description: str, rating: str, pack_id: int = 0, pack_title: str = "", comment: str = "", *,
@@ -228,7 +245,8 @@ TOOLS = {
     }, ["pack_id"]),
 }
 TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research notes (not a saved answer), save the "
-                                "specific products you worked out the artist used, so later searches get them too.", {
+                                "specific products the notes say the artist used, so later searches get them too. "
+                                "Only gear the notes name is saved: not gear you know from elsewhere.", {
     "description": {"type": "string", "description": "The tone, exactly as passed to web_research"},
     "gear": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
         "kind": {"type": "string", "enum": list(GEAR_KINDS)},
