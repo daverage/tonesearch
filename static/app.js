@@ -218,9 +218,70 @@
     }
     const meta = el("p", "t3ai-meta", `Searched TONE3000 for ${data.queries.map((q) => `"${q}"`).join(", ")}${researchedLabel(data)}.${answeredBy(data.ai)}`);
     brief.append(meta);
+    if (data.cached) {
+      const saved = el("p", "t3ai-meta t3ai-saved", `Saved answer from ${new Date(data.saved_at * 1000).toLocaleDateString()}, so it was instant. `);
+      const again = el("button", "link-btn", "Search again");
+      again.type = "button";
+      again.addEventListener("click", () => searchAgain(turn, data));
+      saved.append(again);
+      brief.append(saved);
+    }
     if (data.research_notes) brief.append(researchNotes(data.research_notes, data.library));
     data.warnings.forEach((w) => brief.append(el("p", "t3ai-warning", w)));
+    brief.append(briefRating(data));
     pending.replaceWith(brief);
+  }
+
+  // Ratings go to the site owner and re-order future results; a bad brief also reports its research.
+  function sendFeedback(body) {
+    return post("api/feedback", { topic: state.topic, ...body });
+  }
+
+  function briefRating(data) {
+    const box = el("div", "t3ai-rate");
+    const ask = el("span", null, "Was this tone brief right?");
+    const yes = el("button", "btn btn-secondary btn-small", "Yes");
+    const no = el("button", "btn btn-secondary btn-small", "No");
+    [yes, no].forEach((b) => { b.type = "button"; });
+    const libraryId = data.library ? data.library.id : null;
+    const done = (text) => { box.replaceChildren(el("p", "t3ai-meta", text)); announce(text); };
+    const fail = (error) => { box.append(el("p", "t3ai-warning", error.message)); };
+    yes.addEventListener("click", () => sendFeedback({ target: "brief", vote: 1, library_id: libraryId })
+      .then(() => done("Thanks for the feedback.")).catch(fail));
+    no.addEventListener("click", () => {
+      const comment = el("textarea", "t3ai-rate-comment");
+      comment.rows = 2; comment.maxLength = 500;
+      comment.placeholder = "What was wrong? e.g. he used a Bad Cat, not a JCM800 (optional)";
+      comment.setAttribute("aria-label", "What was wrong with the tone brief (optional)");
+      const send = el("button", "btn btn-primary btn-small", "Send");
+      send.type = "button";
+      send.addEventListener("click", () => sendFeedback({ target: "brief", vote: -1, comment: comment.value.trim(), library_id: libraryId })
+        .then(() => done("Thanks. This will be checked, and the next search for this tone will be worked out again.")).catch(fail));
+      box.replaceChildren(comment, send);
+      comment.focus();
+    });
+    box.append(ask, yes, no);
+    return box;
+  }
+
+  function packRating(pack) {
+    const box = el("div", "t3ai-rate t3ai-rate-pack");
+    const choices = [[1, "Good match"], [-1, "Not this"]].map(([vote, text]) => {
+      const button = el("button", "link-btn", text);
+      button.type = "button";
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("click", async () => {
+        try {
+          await sendFeedback({ target: "pack", vote, pack_id: pack.id, pack_title: pack.title });
+          choices.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+          announce(`Rated ${pack.title}: ${text}.`);
+        } catch (error) { box.append(el("p", "t3ai-warning", error.message)); }
+      });
+      return button;
+    });
+    if (pack.votes > 0) box.append(el("span", "t3ai-votes", `Rated good by ${pack.votes} player${pack.votes === 1 ? "" : "s"}`));
+    box.append(...choices);
+    return box;
   }
 
   function researchedLabel(data) {
@@ -347,7 +408,7 @@
       link.setAttribute("aria-describedby", title.id);
       actions.append(link);
     }
-    body.append(actions);
+    body.append(actions, packRating(pack));
     const panel = el("div", "t3ai-panel");
     panel.id = `${uid}-panel`;
     panel.hidden = true;
@@ -584,8 +645,8 @@
     panel.append(fileColumn, chat);
   }
 
-  async function search() {
-    const prompt = promptEl.value.trim();
+  async function search({ fresh = false, text = null } = {}) {
+    const prompt = (text ?? promptEl.value).trim();
     if (!prompt || state.busy) {
       if (!prompt) { status.textContent = "Describe the tone you want first."; announce(status.textContent); promptEl.focus(); }
       return;
@@ -598,8 +659,9 @@
     const stop = showProgress(research.checked ? RESEARCH_STAGES : PLAIN_STAGES, turn.pending);
     try {
       const data = await post("api/search", {
-        prompt, use_research: research.checked, filters: filters.current(), history: state.history,
+        prompt, use_research: research.checked, filters: filters.current(), history: state.history, fresh,
       });
+      state.topic = data.topic;
       if (!state.goal) state.goal = prompt;
       else state.goal = `${state.goal} / refined: ${prompt}`.slice(-600);
       state.history.push({ role: "user", content: prompt }, { role: "assistant", content: data.plan.summary });
@@ -611,7 +673,7 @@
       renderResults(data);
       announce(`Tone brief ready. ${data.plan.summary} ${status.textContent}`);
       document.title = `${prompt.slice(0, 60)} – TONE Search`;
-      promptEl.value = "";
+      if (text === null) promptEl.value = "";
       label.textContent = "Refine the search (e.g. more gain, darker, a different era, a cheaper amp)";
       promptEl.placeholder = "e.g. a bit more gain for solos";
       resetBtn.hidden = false;
@@ -624,17 +686,33 @@
     }
   }
 
+  // A saved answer looked wrong or stale: drop that turn and work the same request out from scratch.
+  function searchAgain(turn, data) {
+    if (state.busy) return;
+    const entry = state.log.findIndex((item) => item.data === data);
+    if (entry >= 0) state.log.splice(entry, 1);
+    state.history = state.history.slice(0, -2); // a saved answer is only ever the first search
+    if (!state.history.length) { state.goal = ""; state.plan = null; }
+    turn.remove();
+    search({ fresh: true, text: data.topic });
+  }
+
   // Results: the AI's fit sorts by default; the visitor can re-order instantly. Weak matches fold away.
   const WEAK_FIT = 30;
   const ORDER_FROM_SORT = { "best-match": "fit", "downloads-all-time": "downloads", trending: "catalogue", newest: "newest", oldest: "oldest" };
   const ORDER_NAMES = { fit: "best fit first", downloads: "most downloaded first", newest: "newest first", oldest: "oldest first", catalogue: "in TONE3000's order" };
   const ORDERS = {
-    fit: (a, b) => (b.ai_fit ?? -1) - (a.ai_fit ?? -1) || (b.downloads_count || 0) - (a.downloads_count || 0),
+    fit: (a, b) => withVotes(b) - withVotes(a) || (b.downloads_count || 0) - (a.downloads_count || 0),
     downloads: (a, b) => (b.downloads_count || 0) - (a.downloads_count || 0),
     newest: (a, b) => String(b.published || "").localeCompare(String(a.published || "")),
     oldest: (a, b) => String(a.published || "").localeCompare(String(b.published || "")),
     catalogue: (a, b) => (a.catalog_order ?? 999) - (b.catalog_order ?? 999),
   };
+
+  // Players' ratings nudge the AI's fit: 8 points per net vote, at most 3 votes either way (as on the server).
+  function withVotes(pack) {
+    return (pack.ai_fit ?? -1) + 8 * Math.max(-3, Math.min(3, pack.votes || 0));
+  }
 
   function renderResults(data) {
     state.searchedFilters = data.filters;

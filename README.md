@@ -21,6 +21,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
 - [Using the app](#using-the-app)
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Research library](#research-library)
+- [Saved answers and ratings](#saved-answers-and-ratings)
 - [Configuration reference](#configuration-reference)
 - [Choosing a model](#choosing-a-model)
 - [Deploying](#deploying)
@@ -307,6 +308,7 @@ It should call the tools: usually `web_research`, then a few `search_packs` call
 | `lookup` | Exact slugs for the makes, tags and creators filters |
 | `list_pack_models` | The model files in a pack |
 | `download_link` | The pack's TONE3000 page, to download it from |
+| `rate_result` | Saves the user's verdict on the research or a pack |
 
 The `find_tone` prompt walks the assistant through the full research → search → rank workflow.
 
@@ -325,6 +327,28 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 
 - **Review:** set `TONESEARCH_ADMIN_PASSWORD` and open `/admin` (any username). You can search entries and edit their topic, notes and gear. **Approve** marks an entry as checked; approved entries never expire, and new research never overwrites them. Unreviewed entries are searched again after `TONESEARCH_LIBRARY_DAYS`.
 - **Reports:** visitors can press **Report wrong research** under the notes. A reported entry isn't reused until you review it, and it's listed first on the admin page with the reason.
+
+---
+
+## Saved answers and ratings
+
+TONE Search saves its work so repeat searches are instant and cost nothing. Everything is stored in `data/knowledge.sqlite3` next to the research library, and kept for `TONESEARCH_CACHE_DAYS` (3 by default).
+
+| Saved | Reused when | Skips |
+|---|---|---|
+| The whole answer: brief, packs and ranking | The same tone (same topic words, any order) with the same filters and research setting | The AI, web research and TONE3000 |
+| The AI's tone plan | The same tone with different filters | The planning AI call |
+| The AI's ranking | The same tone and the same packs | The ranking AI call |
+| TONE3000 search results, pack file lists and filter suggestions | Any visitor or MCP user asks the same thing | TONE3000 requests |
+
+Only a first search uses saved answers; a refinement depends on the whole conversation. Answers with warnings, such as a skipped ranking, are never saved. A saved answer says so under the brief, with a **Search again** button that works it out from scratch. Saved answers don't count against the hourly search limit. Pack file lists are saved without their download links, which may expire.
+
+**Ratings.** Visitors can say whether a tone brief was right, with an optional comment, and mark each pack **Good match** or **Not this**. MCP assistants can do the same with the `rate_result` tool. Each voter gets one vote per brief or pack, and voting again changes it. Voters are stored as a short salted hash, never as an IP address or key.
+
+- Pack ratings re-order results for that tone: each net vote moves a pack 8 fit points, up to 3 votes either way.
+- A "wrong" brief reports its research (as **Report wrong research** does) and clears that tone's saved answers.
+- Editing or deleting a research library entry on `/admin` also clears that tone's saved answers.
+- `/admin` → **Feedback** lists the topics with the most bad briefs, and recent votes with their comments.
 
 ---
 
@@ -369,6 +393,8 @@ Visitors using their own AI provider can set the same values under **Settings �
 | `TONESEARCH_SEARCHES_PER_HOUR` | 12 | Searches per visitor per hour (0 = no limit) |
 | `TONESEARCH_ADMIN_PASSWORD` | none | Turns on the research library's review page at `/admin` |
 | `TONESEARCH_LIBRARY_DAYS` | 30 | Days unreviewed library research is reused before it's searched again |
+| `TONESEARCH_CACHE_DAYS` | 3 | Days saved answers and TONE3000 results are reused |
+| `TONESEARCH_FEEDBACK_SALT` | built in | Salt for hashing voters; set your own secret value |
 | `TONESEARCH_MCP_CALLS_PER_HOUR` | 120 | Hosted MCP tool calls per IP per hour (0 = no limit) |
 | `TONESEARCH_MCP_RESEARCH_PER_HOUR` | same as searches | Hosted MCP `web_research` calls per IP per hour |
 | `TONESEARCH_CHATS_PER_HOUR` | 40 | Pack questions per visitor per hour |

@@ -153,6 +153,13 @@ def update(db: Path, entry_id: int, *, topic: str, notes: str, gear: list, statu
              entry_id))
 
 
+@_best_effort
+def get(db: Path, entry_id: int) -> dict | None:
+    with _connect(db) as connection:
+        row = connection.execute("SELECT * FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    return _entry(row) if row else None
+
+
 def delete(db: Path, entry_id: int) -> None:
     with _connect(db) as connection:
         connection.execute("DELETE FROM entries WHERE id = ?", (entry_id,))

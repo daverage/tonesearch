@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 
 import pytest
 
@@ -33,6 +34,14 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "DATA_DIR", tmp_path)
     monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server_owner")  # must never be used for MCP callers
     overrides.activate({})
+    monkeypatch.setattr(mcp_server, "_CHECKED_KEYS", _AcceptedKeys())  # tests checking keys replace this
+
+
+class _AcceptedKeys(dict):
+    """Every t3k_cs_ key counts as already accepted by TONE3000, so tests never reach the network."""
+
+    def get(self, key, default=None):
+        return super().get(key, time.time())
 
 
 def call(name, arguments, key="t3k_cs_user"):

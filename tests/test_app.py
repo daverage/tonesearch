@@ -94,8 +94,10 @@ def test_search_ranks_and_rate_limits(client, monkeypatch):
     monkeypatch.setitem(app_module.LIMITS, "search", 2)
     first = client.post("/api/search", json={"prompt": "blues"}).get_json()
     assert [p["id"] for p in first["results"]] == [1, 2] and first["results"][0]["ai_fit"] == 90
-    assert client.post("/api/search", json={"prompt": "blues"}).status_code == 200
-    assert client.post("/api/search", json={"prompt": "blues"}).status_code == 429
+    assert client.post("/api/search", json={"prompt": "blues", "fresh": True}).status_code == 200
+    assert client.post("/api/search", json={"prompt": "blues", "fresh": True}).status_code == 429
+    again = client.post("/api/search", json={"prompt": "blues"}).get_json()  # saved answers cost no limit
+    assert again["cached"] and [p["id"] for p in again["results"]] == [1, 2]
 
 
 def test_page_renders_with_script_root(client):
@@ -278,7 +280,7 @@ def test_reused_plan_skips_research_and_planning(client, monkeypatch):
 
 def test_lookup_is_cached_and_bounded(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(app_module, "tone3000_lookup", lambda kind, q: calls.append((kind, q)) or [{"value": "marshall", "label": "Marshall", "count": 9}])
+    monkeypatch.setattr(app_module, "tone3000_lookup", lambda kind, q, **k: calls.append((kind, q)) or [{"value": "marshall", "label": "Marshall", "count": 9}])
     app_module.LOOKUP_CACHE.clear()
     for _ in range(3):
         assert client.get("/api/lookup/makes?query=Mars").get_json()["suggestions"][0]["label"] == "Marshall"

@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from tonesearch import knowledge, overrides, research
+from tonesearch import cache, feedback, knowledge, overrides, research
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 INSTRUCTIONS = """TONE Search finds TONE3000 NAM (Neural Amp Modeler) capture packs for a guitar tone.
@@ -25,7 +25,8 @@ You do the thinking; these tools fetch data. Workflow:
    Use lookup to find exact make, tag or creator slugs before using them as filters.
 3. Call search_packs for each query and merge the results by id.
 4. Rank the packs against the user's tone yourself and explain the fit briefly.
-5. For a chosen pack, list_pack_models shows its files; download_link gives the pack's TONE3000 page to download it from."""
+5. For a chosen pack, list_pack_models shows its files; download_link gives the pack's TONE3000 page to download it from.
+6. When the user says whether a result was right or wrong, call rate_result: it improves results for everyone."""
 NO_KEY = ("TONE Search needs your own TONE3000 secret key (t3k_cs_…) from https://www.tone3000.com: "
           "set TONE3000_API_KEY locally, or send 'Authorization: Bearer t3k_cs_…' to the hosted endpoint.")
 
@@ -71,7 +72,7 @@ def search_packs(query: str, gears=None, sizes=None, makes=None, tags=None, crea
         raise ToolError(f"Invalid filters. gears: {', '.join(research.GEARS)}; sizes: {', '.join(research.SIZES)}; "
                         f"format: {', '.join(research.FORMATS)}; architecture: {', '.join(research.ARCHITECTURES)}; "
                         f"sort: {', '.join(research.SORTS)}. Lists hold up to 10 values without '_' or ','.")
-    return research.tone3000_search(query, filters=filters, opener=opener)
+    return research.tone3000_search(query, filters=filters, opener=opener, cache_db=library_path())
 
 
 def lookup(kind: str, text: str, *, opener=research.urlopen) -> list[dict]:
@@ -79,17 +80,37 @@ def lookup(kind: str, text: str, *, opener=research.urlopen) -> list[dict]:
         raise ToolError("kind must be makes, tags or creators.")
     if not 0 < len(text.strip()) <= 60:
         raise ToolError("The lookup text must be 1-60 characters.")
-    return research.tone3000_lookup(kind, text.strip(), opener=opener)
+    return research.tone3000_lookup(kind, text.strip(), opener=opener, cache_db=library_path())
 
 
 def list_pack_models(pack_id: int, architecture: str = "2", *, opener=research.urlopen) -> list[dict]:
     if architecture not in research.ARCHITECTURES:
         raise ToolError("architecture must be 1, 2 or any.")
-    return research.tone3000_models(pack_id, architecture=architecture, opener=opener)
+    return research.tone3000_models(pack_id, architecture=architecture, opener=opener, cache_db=library_path())
 
 
 def download_link(pack_id: int) -> str:
     return f"https://www.tone3000.com/tones/{pack_id}"
+
+
+def rate_result(description: str, rating: str, pack_id: int = 0, pack_title: str = "", comment: str = "", *,
+                voter_id: str = "") -> str:
+    """Save the user's verdict. A bad brief stops its saved research being reused until the owner checks it."""
+    words = " ".join(knowledge.topic_words(description))
+    if not words or len(description) > 500:
+        raise ToolError("Give the tone the user asked for (1-500 characters).")
+    if rating not in ("good", "bad") or len(comment) > 500 or pack_id < 0:
+        raise ToolError("rating must be good or bad; comment up to 500 characters.")
+    vote, target = (1 if rating == "good" else -1), ("pack" if pack_id else "brief")
+    entry = knowledge.find(library_path(), description) if target == "brief" else None
+    feedback.record(library_path(), voter_id=voter_id, words=words, prompt=description, target=target, vote=vote,
+                    pack_id=pack_id, pack_title=pack_title, comment=comment, entry_id=entry and entry["id"],
+                    source="mcp")
+    if target == "brief" and vote == -1:
+        if entry:
+            knowledge.flag(library_path(), entry["id"], comment or "An MCP user rated the research as wrong.")
+        cache.forget_topic(library_path(), words)
+    return "Thanks, your feedback was saved."
 
 
 def _strings(description):
@@ -131,6 +152,15 @@ TOOLS = {
         "pack_id": {"type": "integer"},
     }, ["pack_id"]),
 }
+TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
+                                    "the research and brief (leave pack_id out) or one pack. It improves future "
+                                    "results for everyone.", {
+    "description": {"type": "string", "description": "The tone the user asked for, as passed to web_research"},
+    "rating": {"type": "string", "enum": ["good", "bad"]},
+    "pack_id": {"type": "integer", "description": "The pack being rated; leave out to rate the research/brief"},
+    "pack_title": {"type": "string"},
+    "comment": {"type": "string", "description": "What was right or wrong, in the user's words"},
+}, ["description", "rating"])
 PROMPT = {"name": "find_tone", "description": "Find NAM captures for a guitar tone, step by step.",
           "arguments": [{"name": "description", "description": "The tone you want", "required": True}]}
 
@@ -163,8 +193,11 @@ def call_tool(name: str, arguments: dict, key: str, **injected) -> dict:
             raise ToolError(NO_KEY)
         overrides.activate({"tone3000_api_key": key})  # never falls back to a server's own key
         try:
-            if name == "web_research":  # the one tool that never reaches TONE3000, so check the key there first
-                _check_key(key)
+            # Saved answers and web research never reach TONE3000 with the caller's key, so check every key here:
+            # otherwise any made-up t3k_cs_ key would get cached catalogue data and free web searches.
+            _check_key(key)
+            if name == "rate_result":
+                injected = {**injected, "voter_id": feedback.voter("mcp:" + key)}
             result = function(**arguments, **injected)
         except TypeError as exc:
             raise ToolError(f"Invalid arguments for {name}.") from exc

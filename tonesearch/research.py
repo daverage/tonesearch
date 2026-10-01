@@ -17,7 +17,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-from tonesearch import overrides
+from tonesearch import cache, overrides
 
 
 def _env(name: str) -> str:
@@ -481,7 +481,8 @@ def _search_params(query: str, filters: dict) -> dict:
     return params
 
 
-def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str = "", opener=urlopen) -> list[dict]:
+def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str = "", opener=urlopen,
+                    cache_db=None) -> list[dict]:
     """Search public TONE3000 metadata; captures themselves are never downloaded.
 
     `query` is the narrow amp-family term sent to the catalogue API, which
@@ -498,12 +499,16 @@ def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str 
         f"{TONE3000_BASE}/tones/search?{urlencode(params)}",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
-    try:
-        with opener(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError(f"TONE3000 search failed: {exc}") from exc
-    tones = payload.get("data", []) if isinstance(payload, dict) else []
+    def fetch():
+        try:
+            with opener(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"TONE3000 search failed: {exc}") from exc
+        tones = payload.get("data", []) if isinstance(payload, dict) else []
+        return [tone for tone in tones if isinstance(tone, dict)]
+    # Public catalogue data, the same for every key, so it's shared between visitors and the MCP server.
+    tones = cache.remember(cache_db, "search:" + json.dumps(params, sort_keys=True), fetch)
     results = []
     for position, tone in enumerate(tones):
         # An id-less entry can never be turned into a working discuss/download
@@ -577,8 +582,18 @@ def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", opener=ur
     return models[:MAX_MODELS]
 
 
-def tone3000_models(tone_id: int, *, architecture: str = "2", opener=urlopen) -> list[dict]:
-    """Return model names for one public TONE3000 tone pack, never credentials."""
+def tone3000_models(tone_id: int, *, architecture: str = "2", opener=urlopen, cache_db=None) -> list[dict]:
+    """Return model names for one public TONE3000 tone pack, never credentials or download links."""
+    key = f"models:{tone_id}:{architecture}"
+    saved = cache.get(cache_db, key)
+    if saved:
+        return saved
+    models = _tone3000_model_names(tone_id, architecture, opener)
+    cache.put(cache_db, key, models)  # names only: download links may be signed and short-lived
+    return models
+
+
+def _tone3000_model_names(tone_id: int, architecture: str, opener) -> list[dict]:
     raw_models = _tone3000_models_payload(tone_id, architecture=architecture, opener=opener)
     models = []
     for model in raw_models:
@@ -698,7 +713,19 @@ def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -
 LOOKUP_KINDS = {"makes": "makes", "tags": "tags", "creators": "users"}
 
 
-def tone3000_lookup(kind: str, query: str, *, opener=urlopen) -> list[dict]:
+def tone3000_lookup(kind: str, query: str, *, opener=urlopen, cache_db=None) -> list[dict]:
+    """Catalogue suggestions for the filter fields: [{"value", "label", "count"}], most used first."""
+    if cache_db is not None:
+        key = f"lookup:{kind}:{query.lower()}"
+        saved = cache.get(cache_db, key)
+        if saved is None:
+            saved = _tone3000_lookup(kind, query, opener=opener)
+            cache.put(cache_db, key, saved)
+        return saved
+    return _tone3000_lookup(kind, query, opener=opener)
+
+
+def _tone3000_lookup(kind: str, query: str, *, opener=urlopen) -> list[dict]:
     """Catalogue suggestions for the filter fields: [{"value", "label", "count"}], most used first."""
     endpoint = LOOKUP_KINDS[kind]
     api_key = _require_tone3000_api_key(for_action="search")

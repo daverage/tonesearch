@@ -6,6 +6,7 @@ cPanel:     passenger_wsgi.py imports `application` from here (see README.md).
 from __future__ import annotations
 
 import hmac
+import json
 import os
 import sqlite3
 import time
@@ -15,7 +16,7 @@ from urllib.parse import quote, urlencode, urlparse
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import ai, knowledge, mcp_server, overrides
+from tonesearch import ai, cache, feedback, knowledge, mcp_server, overrides
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
                                  tone3000_search, web_notes)
@@ -29,6 +30,7 @@ application = app
 # Changes whenever a static file is redeployed, so Cloudflare's cache never serves stale JS/CSS.
 ASSET_VERSION = str(int(max(f.stat().st_mtime for f in (ROOT / "static").iterdir())))
 app.jinja_env.globals["asset_version"] = ASSET_VERSION
+app.jinja_env.filters["datetime"] = lambda at: time.strftime("%d %b %Y %H:%M", time.gmtime(at)) + " UTC"
 
 
 # Google AdSense (Auto ads), off unless the site owner sets their publisher ID (ca-pub-…).
@@ -51,6 +53,7 @@ LIMITS = {
     # The hosted MCP endpoint uses the caller's own TONE3000 key; these limits protect this server and the web search.
     "mcp": int(os.environ.get("TONESEARCH_MCP_CALLS_PER_HOUR", "120")),
     "flag": 20,  # "wrong research" reports
+    "feedback": 60,  # brief and pack ratings
 }
 # MCP web research defaults to the website's search limit, so neither runs out before the other.
 LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", LIMITS["search"]))
@@ -244,9 +247,14 @@ def admin():
     if denied := _admin_denied():
         return denied
     q, status = request.args.get("q", "")[:100], request.args.get("status", "")
+    if request.args.get("view") == "feedback":
+        vote = {"good": 1, "bad": -1}.get(request.args.get("vote", ""))
+        return render_template("admin.html", view="feedback", q=q, vote=request.args.get("vote", ""),
+                               votes=feedback.recent(_library(), vote=vote, text=q),
+                               topics=feedback.topic_summary(_library()), message=request.args.get("message", "")[:200])
     every = knowledge.search(_library(), limit=100_000)
     counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
-    return render_template("admin.html", entries=knowledge.search(_library(), q, status), q=q, status=status,
+    return render_template("admin.html", view="library", entries=knowledge.search(_library(), q, status), q=q, status=status,
                            statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
                            message=request.args.get("message", "")[:200])
 
@@ -257,6 +265,9 @@ def admin_entry(entry_id: int):
         return denied
     form = request.form
     action = form.get("action", "save")
+    before = knowledge.get(_library(), entry_id)
+    if before:  # saved plans and results for this topic were built on the old research
+        cache.forget_topic(_library(), before["words"])
     if action == "delete":
         knowledge.delete(_library(), entry_id)
         message = f"Deleted entry {entry_id}."
@@ -285,14 +296,29 @@ def api_search():
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 600:
         return jsonify({"error": "Describe the tone in 600 characters or fewer."}), 400
     use_web = data.get("use_research", False)
+    fresh = data.get("fresh", False)  # "Search again": work it out anew rather than reuse saved answers
     filters = _search_filters(data.get("filters"))
     reuse = data.get("reuse_plan")
     plan = _reused_plan(reuse) if reuse is not None else None
     history = data.get("history", [])
-    if not isinstance(use_web, bool) or filters is None or (reuse is not None and plan is None):
+    if not isinstance(use_web, bool) or not isinstance(fresh, bool) or filters is None or (reuse is not None and plan is None):
         return jsonify({"error": "Invalid search options."}), 400
     if not _valid_history(history):
         return jsonify({"error": "Invalid conversation."}), 400
+
+    # The topic names what was asked for across a conversation; feedback and saved answers are filed under it.
+    first = next((item["content"] for item in history if item["role"] == "user"), "")
+    topic = f"{first} {prompt}".strip()[:600] if first else prompt.strip()
+    words = " ".join(knowledge.topic_words(topic))
+    # Only a first search reads or writes saved answers: a refinement depends on the whole conversation.
+    reusable = bool(words) and not history and reuse is None
+    result_key = f"result:{words}:{use_web}:{json.dumps(filters, sort_keys=True)}"
+    if reusable and not fresh:
+        saved = cache.get(_library(), result_key)
+        if saved:
+            feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
+            return jsonify({**saved, "cached": True})  # no AI, web or TONE3000 calls, so no hourly limit spent
+
     if not _brings_own("provider", "api_key", "tone3000_api_key") and _over_limit("search"):
         return _limited()
 
@@ -302,7 +328,7 @@ def api_search():
     library = None  # the research library entry this search used or created
     fresh_research = False
     if use_web and plan is None:
-        library = knowledge.find(_library(), prompt)
+        library = knowledge.find(_library(), topic if history else prompt)
         if library:
             research = library["notes"]
         else:
@@ -311,16 +337,21 @@ def api_search():
                 fresh_research = True
             except RuntimeError as exc:
                 warnings.append(f"Web research unavailable: {exc}")
+    plan_key = f"plan:{words}:{use_web}"
+    if plan is None and reusable and not fresh and not fresh_research:
+        plan = cache.get(_library(), plan_key)
     try:
         if plan is None:
             plan = ai.plan_tone(prompt, research_notes=research, history=history,
                                 deadline=deadline - RANKING_RESERVE_SECONDS)
+            if reusable:
+                cache.put(_library(), plan_key, plan, words)
     except ai.AiError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
         entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"))
-        library = {"id": entry_id, "status": "new"} if entry_id else None
+        library = knowledge.get(_library(), entry_id) if entry_id else None  # a reported entry stays flagged
     elif library and not library["gear"]:
         knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
 
@@ -330,7 +361,7 @@ def api_search():
     seen: set = set()
     for query_index, query in enumerate(queries):
         try:
-            for match in tone3000_search(query, filters=filters, rank_query=rank_query):
+            for match in tone3000_search(query, filters=filters, rank_query=rank_query, cache_db=_library()):
                 if match["id"] not in seen:
                     seen.add(match["id"])
                     # Interleave the searches in TONE3000's own order: first of each, then second of each...
@@ -341,23 +372,65 @@ def api_search():
     # Small models stop scoring partway through long lists: rank a catalogue-ordered shortlist.
     packs = _shortlist(packs, filters["sort"])
     if packs:
-        scores = {}
-        if deadline - time.monotonic() < 8:
-            warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
-        else:
-            try:
-                scores = ai.rank_packs(prompt, plan["summary"], packs, deadline=deadline)
-            except ai.AiError as exc:
-                warnings.append(f"AI ranking unavailable, showing catalogue order: {exc}")
+        rank_key = f"rank:{words}:{use_web}:{','.join(str(p['id']) for p in sorted(packs, key=lambda p: p['id']))}"
+        scores = cache.get(_library(), rank_key) if reusable and not fresh else None
+        if scores is None:
+            scores = {}
+            if deadline - time.monotonic() < 8:
+                warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
+            else:
+                try:
+                    scores = ai.rank_packs(prompt, plan["summary"], packs, deadline=deadline)
+                    if reusable:
+                        cache.put(_library(), rank_key, {str(k): v for k, v in scores.items()}, words)
+                except ai.AiError as exc:
+                    warnings.append(f"AI ranking unavailable, showing catalogue order: {exc}")
+        scores = {int(k): v for k, v in scores.items()}  # JSON keys come back as strings
         for pack in packs:
             if pack["id"] in scores:
                 pack["ai_fit"] = scores[pack["id"]]["fit"]
                 pack["ai_why"] = scores[pack["id"]]["why"]
         packs.sort(key=lambda p: (p.get("ai_fit", -1), p.get("match_score", 0), p.get("downloads_count") or 0), reverse=True)
-    return jsonify({"ai": ai.source(), "plan": plan, "queries": queries, "results": packs, "warnings": warnings, "researched": bool(research), "filters": filters, "reused_plan": reuse is not None,
-                    "research_notes": research,
-                    "library": {"id": library["id"], "status": library["status"], "reused": not fresh_research}
-                    if library else None})
+    body = {"ai": ai.source(), "plan": plan, "queries": queries, "results": packs, "warnings": warnings,
+            "researched": bool(research), "filters": filters, "reused_plan": reuse is not None,
+            "research_notes": research, "topic": topic, "saved_at": time.time(),
+            "library": {"id": library["id"], "status": library["status"], "reused": not fresh_research}
+            if library else None}
+    if reusable and packs and not warnings:  # never save a partial answer
+        cache.put(_library(), result_key, {**body, "library": body["library"] and {**body["library"], "reused": True}},
+                  words)
+    feedback.apply_votes(packs, feedback.pack_votes(_library(), words))
+    return jsonify({**body, "cached": False})
+
+
+@app.post("/api/feedback")
+def api_feedback():
+    """A visitor rates a tone brief or a pack. A bad brief also reports its research and drops saved answers."""
+    data = request.get_json(silent=True) or {}
+    topic, target, vote = data.get("topic"), data.get("target"), data.get("vote")
+    comment, pack_id, pack_title = data.get("comment", ""), data.get("pack_id", 0), data.get("pack_title", "")
+    library_id = data.get("library_id")
+    if (not isinstance(topic, str) or not 0 < len(topic) <= 600 or target not in feedback.TARGETS
+            or vote not in (1, -1) or not isinstance(comment, str) or len(comment) > 500
+            or not isinstance(pack_id, int) or not isinstance(pack_title, str)
+            or (target == "pack" and pack_id <= 0) or not (library_id is None or isinstance(library_id, int))):
+        return jsonify({"error": "Invalid feedback."}), 400
+    words = " ".join(knowledge.topic_words(topic))
+    if not words:
+        return jsonify({"error": "Invalid feedback."}), 400
+    if _over_limit("feedback"):
+        return _limited()
+    try:
+        feedback.record(_library(), voter_id=feedback.voter(_visitor()), words=words, prompt=topic, target=target,
+                        vote=vote, pack_id=pack_id, pack_title=pack_title, comment=comment, entry_id=library_id)
+    except sqlite3.Error:
+        app.logger.exception("Feedback not saved")
+        return jsonify({"error": "Feedback couldn't be saved just now."}), 503
+    if target == "brief" and vote == -1:
+        if library_id:
+            knowledge.flag(_library(), library_id, comment or "Visitor rated the tone brief as wrong.")
+        cache.forget_topic(_library(), words)
+    return jsonify({"ok": True})
 
 
 @app.post("/api/library/<int:entry_id>/flag")
@@ -382,7 +455,7 @@ def api_models(tone_id: int):
     if not _brings_own("tone3000_api_key") and _over_limit("files"):
         return _limited()
     try:
-        return jsonify({"models": tone3000_models(tone_id, architecture=architecture)})
+        return jsonify({"models": tone3000_models(tone_id, architecture=architecture, cache_db=_library())})
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
@@ -430,7 +503,7 @@ def api_lookup(kind: str):
     if not _brings_own("tone3000_api_key") and _over_limit("lookup"):
         return _limited()
     try:
-        suggestions = tone3000_lookup(kind, query)
+        suggestions = tone3000_lookup(kind, query, cache_db=_library())
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
     if len(LOOKUP_CACHE) > 2_000:
@@ -463,7 +536,7 @@ def api_pack_chat():
         "tags": [str(t)[:40] for t in (pack.get("tags") or [])[:12]] if isinstance(pack.get("tags"), list) else [],
     }
     try:
-        models = tone3000_models(tone_id, architecture=architecture)
+        models = tone3000_models(tone_id, architecture=architecture, cache_db=_library())
         answer = ai.ask_about_pack(question, safe_pack, [m["name"] for m in models], tone_goal=tone_goal, history=history,
                                    deadline=time.monotonic() + REQUEST_BUDGET_SECONDS)
     except RuntimeError as exc:  # AiError is a RuntimeError too
