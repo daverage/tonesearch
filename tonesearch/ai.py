@@ -736,6 +736,10 @@ _KNOWN_PEDALS = re.compile(
 _PRACTICE_AMPS = re.compile(
     r"mustang|katana|\bspark\b|spider|\bthr\d*\b|fender frontman|\bcube\b|\bpathfinder\b|headrush|helix|"
     r"kemper|axe-?fx|quad ?cortex|tonex|\bplugin\b|amplitube|bias fx|neural dsp|\bgp-?\d+\b", re.IGNORECASE)
+# Electric guitars aren't captured on TONE3000, so a search for one only finds packs that mention it in passing.
+_GUITAR_MODELS = re.compile(r"strat(ocaster)?\b|tele(caster)?\b|les ?paul|\bsg\b|explorer|flying ?v|jazzmaster|"
+                            r"jaguar|\bes-?335\b|\bprs\b|custom 2[24]\b|superstrat|\bguitar\b", re.IGNORECASE)
+_WANTS_GUITAR = re.compile(r"acoustic|guitar (models?|captures?|sims?)|piezo|\bdi\b", re.IGNORECASE)
 _WANTS_MODERN = re.compile(r"budget|cheap|modern|modell?ing|practice|beginner|affordable|plugin|at home", re.IGNORECASE)
 
 
@@ -755,6 +759,8 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "or album, list that player's documented gear for it.\n"
         "  Classify kind by what the product IS, not by its brand: a stompbox is an effect even from an amp maker "
         "(Marshall Shredmaster, Marshall Guv'nor, Marshall Bluesbreaker pedal, Boss DS-1, ProCo RAT, Ibanez Tube Screamer). "
+        "Research notes can disagree: trust what the player said in an interview or a documented rig rundown over "
+        "a tone-settings site's catalogue claims or averaged EQ settings, and include every amp the player names.\n  "
         "When research names a specific effect, use exactly that product and never swap in a different, better-known "
         "one; if it is uncertain, still name the researched one and say so in its role. Ignore gear that a tone-settings "
         "site recommends for recreating the sound today (modelling or practice amps such as a Fender Mustang, Boss "
@@ -775,11 +781,20 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
     if not _WANTS_MODERN.search(prompt):  # drop "recreate it at home" suggestions the model copied from tone sites
         plan.gear = [g for g in plan.gear if not _PRACTICE_AMPS.search(g.name)]
         plan.search_queries = [q for q in plan.search_queries if not _PRACTICE_AMPS.search(q)]
+    queries = list(dict.fromkeys(q.strip()[:80] for q in plan.search_queries if q and q.strip()))
+    if not _WANTS_GUITAR.search(prompt):
+        guitars = {g.name.lower() for g in plan.gear if g.kind in ("guitar", "pickup")}
+        queries = [q for q in queries if q.lower() not in guitars and not _GUITAR_MODELS.search(q)]
+        # Spare slots go to amps from the gear list that no query covers yet.
+        for amp in (g.name.strip() for g in plan.gear if g.kind == "amp"):
+            covered = any(set(amp.lower().split()) & set(q.lower().split()) - {"amp", "head", "combo"} for q in queries)
+            if len(queries) < 3 and amp and not covered:
+                queries.append(amp[:80])
     return {
         "summary": plan.summary.strip()[:cfg.tuning.max_explanation_chars],
         "advice": [tip.strip() for tip in plan.advice if tip.strip()][:6],
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
-        "search_queries": list(dict.fromkeys(q.strip()[:80] for q in plan.search_queries if q and q.strip()))[:3],
+        "search_queries": queries[:3],
     }
 
 

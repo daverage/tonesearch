@@ -691,3 +691,15 @@ def test_rate_limits_ignore_spoofed_forwarded_ips(client, monkeypatch):
     without_cloudflare = {"X-Forwarded-For": "9.9.9.9, 198.51.100.7"}
     with app_module.app.test_request_context(headers=without_cloudflare):
         assert app_module._visitor() == "198.51.100.7"
+
+
+def test_plan_drops_guitar_searches_and_fills_with_unsearched_amps(monkeypatch):
+    monkeypatch.setattr(ai, "config", lambda: ai.AiConfig("custom", "https://x/v1", "m", "k"))
+    content = json.dumps({"summary": "s", "advice": [], "search_queries": [
+        "Marshall JCM800 2203", "ESP Stratocaster", "Marshall 4x12 Celestion Greenback"], "gear": [
+        {"kind": "amp", "name": "Marshall JCM800 2203"}, {"kind": "amp", "name": "Bad Cat Hot Cat 100"},
+        {"kind": "guitar", "name": "ESP Stratocaster"}]})
+    reply = lambda req, timeout: _Response({"choices": [{"message": {"content": content}}]})
+    plan = ai.plan_tone("Porcupine Tree In Absentia tone", opener=reply)
+    assert plan["search_queries"] == ["Marshall JCM800 2203", "Marshall 4x12 Celestion Greenback", "Bad Cat Hot Cat 100"]
+    assert "ESP Stratocaster" in ai.plan_tone("acoustic guitar models of a Strat", opener=reply)["search_queries"]
