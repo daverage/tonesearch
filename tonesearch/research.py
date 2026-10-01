@@ -155,8 +155,9 @@ _GEAR_WORDS = {
     "overdrive", "distortion", "wah", "screamer", "rangemaster", "booster", "univibe", "leslie", "reverb",
     "tremolo", "echo", "delay", "echoplex", "valve", "tube", "tubes", "rectifier", "jcm800", "soldano", "engl",
     "bogner", "friedman", "laney", "matchless", "muff", "klon", "prs", "ibanez", "schecter", "compressor", "chorus",
-    "flanger", "phaser",
+    "flanger", "phaser", "darkglass", "sansamp", "svt", "preamp", "bass", "di",
 }
+_BASS = re.compile(r"\bbass(ist|ists)?\b", re.IGNORECASE)
 _GEAR_PHRASES = ("les paul", "bad cat", "pro co rat", "big muff", "tube screamer", "dual rectifier")
 # Words that support gear evidence but don't name any equipment ("recorded in the studio").
 _CONTEXT_WORDS = {"recorded", "recording", "studio", "session", "played", "plugged", "used", "cranked", "gain", "rig"}
@@ -327,7 +328,8 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     deadline = time.monotonic() + RESEARCH_SEARCH_SECONDS
     # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
     # unrelated shops; these two found forums, interviews and gear write-ups instead.
-    queries = (f"{topic} guitarist amp pedals gear used", f"{topic} guitarist interview amplifier gear")
+    player = "bassist bass" if _BASS.search(query) else "guitarist"  # a bass request must not find guitar rigs
+    queries = (f"{topic} {player} amp pedals gear used", f"{topic} {player} interview amplifier gear")
     with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
         outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
     if not any(found for found, _ in outcomes):

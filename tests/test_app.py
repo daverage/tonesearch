@@ -705,3 +705,28 @@ def test_plan_drops_guitar_searches_and_fills_with_unsearched_amps(monkeypatch):
     plan = ai.plan_tone("Porcupine Tree In Absentia tone", opener=reply)
     assert plan["search_queries"] == ["Marshall JCM800 2203", "Marshall 4x12 Celestion Greenback", "Bad Cat Hot Cat 100"]
     assert "ESP Stratocaster" in ai.plan_tone("acoustic guitar models of a Strat", opener=reply)["search_queries"]
+
+
+def test_bass_requests_research_bass_rigs(monkeypatch):
+    monkeypatch.setattr(research.time, "sleep", lambda seconds: None)  # no waiting between search engines
+    asked = []
+
+    def search(query, *args, **kwargs):
+        asked.append(query)
+        return []
+    with pytest.raises(RuntimeError):
+        research.web_notes("Periphery bass compressed distorted highs", search=search)
+    assert asked and all("bassist" in q and "guitarist" not in q for q in asked[:2])
+    asked.clear()
+    with pytest.raises(RuntimeError):
+        research.web_notes("Periphery guitar tone", search=search)
+    assert all("guitarist" in q for q in asked[:2])
+
+
+def test_plan_drops_generic_gear_names(monkeypatch):
+    monkeypatch.setattr(ai, "config", lambda: ai.AiConfig("custom", "https://x/v1", "m", "k"))
+    content = json.dumps({"summary": "s", "advice": [], "search_queries": ["Darkglass B7K", "Compressor"], "gear": [
+        {"kind": "effect", "name": "Compressor"}, {"kind": "effect", "name": "Overdrive pedal"},
+        {"kind": "amp", "name": "Clean amp"}, {"kind": "effect", "name": "Darkglass Microtubes B7K"}]})
+    plan = ai.plan_tone("Periphery bass", opener=lambda req, timeout: _Response({"choices": [{"message": {"content": content}}]}))
+    assert [g["name"] for g in plan["gear"]] == ["Darkglass Microtubes B7K"] and plan["search_queries"] == ["Darkglass B7K"]

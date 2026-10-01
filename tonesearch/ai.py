@@ -740,6 +740,12 @@ _PRACTICE_AMPS = re.compile(
 _GUITAR_MODELS = re.compile(r"strat(ocaster)?\b|tele(caster)?\b|les ?paul|\bsg\b|explorer|flying ?v|jazzmaster|"
                             r"jaguar|\bes-?335\b|\bprs\b|custom 2[24]\b|superstrat|\bguitar\b", re.IGNORECASE)
 _WANTS_GUITAR = re.compile(r"acoustic|guitar (models?|captures?|sims?)|piezo|\bdi\b", re.IGNORECASE)
+# A category is not a product: "Compressor" or "Overdrive pedal" gives the player nothing to find or search for.
+_GENERIC_GEAR = re.compile(
+    r"^(an? |the )?(clean |high-gain |tube |valve |solid-state |bass |guitar )?(amp(lifier)?( head)?|head|combo|cab(inet)?|"
+    r"compressor|overdrive|distortion|fuzz|boost(er)?|delay|reverb|chorus|flanger|phaser|tremolo|wah|eq|equali[sz]er|"
+    r"noise gate|gate|octave|pitch shifter|looper|tuner|preamp|di( box)?|pedal|guitar|bass)( pedal| unit)?s?$",
+    re.IGNORECASE)
 _WANTS_MODERN = re.compile(r"budget|cheap|modern|modell?ing|practice|beginner|affordable|plugin|at home", re.IGNORECASE)
 
 
@@ -753,6 +759,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         + "Return JSON with:\n"
         "- summary: 2-4 sentences describing the tone in plain words (gain, EQ, feel, era).\n"
         "- advice: 3-6 short practical tips (amp settings, playing, guitar/pickup choice, and effects only if relevant).\n"
+        "If the request is about a BASS tone, describe the bass sound and list only the bassist's gear (bass amps, "
+        "bass preamps, DIs and pedals such as a Darkglass or SansAmp, the bass itself): never the band's guitar rig. "
+        "A bass sound described as distorted highs over clean lows usually means a split or parallel chain: say so.\n"
         "- gear: the specific products that define this tone, each with kind, name and a short role. Use real "
         "make and model names (for example 'Fender Vibroverb', 'Ibanez TS808 Tube Screamer', 'Fender Stratocaster'), "
         "never generic categories like 'tube amplifier' or 'overdrive pedal'. If the request names an artist, song "
@@ -778,6 +787,8 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
     for gear in plan.gear:
         if gear.kind == "amp" and _KNOWN_PEDALS.search(gear.name):
             gear.kind = "effect"  # small models file amp-brand pedals (Marshall Shredmaster) under amps
+    plan.gear = [g for g in plan.gear if not _GENERIC_GEAR.match(g.name.strip())]
+    plan.search_queries = [q for q in plan.search_queries if not _GENERIC_GEAR.match(q.strip())]
     if not _WANTS_MODERN.search(prompt):  # drop "recreate it at home" suggestions the model copied from tone sites
         plan.gear = [g for g in plan.gear if not _PRACTICE_AMPS.search(g.name)]
         plan.search_queries = [q for q in plan.search_queries if not _PRACTICE_AMPS.search(q)]
