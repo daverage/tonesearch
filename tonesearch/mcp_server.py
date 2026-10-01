@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-from tonesearch import cache, feedback, knowledge, overrides, research
+from tonesearch import ai, cache, feedback, knowledge, overrides, research
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 INSTRUCTIONS = """TONE Search finds TONE3000 NAM (Neural Amp Modeler) capture packs for a guitar tone.
@@ -22,6 +22,7 @@ You do the thinking; these tools fetch data. Workflow:
 1. Always call web_research first with the user's description, even if you know the gear: when TONE Search
    already has an answer for this tone it returns it instantly (brief, gear and packs ranked by players' votes).
    Otherwise it researches the actual rig (amp, pedals, cab) on the web. Base your queries on what it finds.
+   If it returned fresh research notes, call save_gear with the specific products the artist used.
 2. Plan 1-3 short catalogue queries naming gear, e.g. "Marshall Plexi" or "Klon Centaur", not song titles.
    Use lookup to find exact make, tag or creator slugs before using them as filters.
 3. Call search_packs for each query and merge the results by id.
@@ -136,6 +137,35 @@ def download_link(pack_id: int) -> str:
     return f"https://www.tone3000.com/tones/{pack_id}"
 
 
+GEAR_KINDS = ("amp", "effect", "guitar", "pickup", "cab", "other")
+
+
+def save_gear(description: str, gear: list) -> str:
+    """Store the gear the assistant worked out from web_research, as the website's AI does for its searches.
+
+    Only fills an empty gear list: never replaces gear the owner edited or the website's AI wrote."""
+    if not isinstance(gear, list) or not 0 < len(gear) <= 12:
+        raise ToolError("gear must list 1-12 items.")
+    items = []
+    for item in gear:
+        if not isinstance(item, dict) or not str(item.get("name") or "").strip():
+            raise ToolError("Each gear item needs kind, name and role.")
+        name = str(item["name"]).strip()[:80]
+        if ai._GENERIC_GEAR.match(name):
+            continue  # "Compressor" is a category, not a product
+        kind = item.get("kind") if item.get("kind") in GEAR_KINDS else "other"
+        items.append({"kind": kind, "name": name, "role": str(item.get("role") or "").strip()[:240]})
+    if not items:
+        raise ToolError("Name real products (e.g. 'Darkglass Microtubes B7K'), not categories like 'Compressor'.")
+    entry = knowledge.find(library_path(), description, count_use=False)
+    if not entry:
+        return "There's no saved research for this tone yet: call web_research first."
+    if entry["gear"]:
+        return "This research already has a gear list, so it was left as it is."
+    knowledge.add_gear(library_path(), entry["id"], items)
+    return f"Saved {len(items)} gear item{'s' if len(items) != 1 else ''} with the research."
+
+
 def rate_result(description: str, rating: str, pack_id: int = 0, pack_title: str = "", comment: str = "", *,
                 voter_id: str = "") -> str:
     """Save the user's verdict. A bad brief stops its saved research being reused until the owner checks it."""
@@ -197,6 +227,15 @@ TOOLS = {
         "pack_id": {"type": "integer"},
     }, ["pack_id"]),
 }
+TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research notes (not a saved answer), save the "
+                                "specific products you worked out the artist used, so later searches get them too.", {
+    "description": {"type": "string", "description": "The tone, exactly as passed to web_research"},
+    "gear": {"type": "array", "maxItems": 12, "items": {"type": "object", "properties": {
+        "kind": {"type": "string", "enum": list(GEAR_KINDS)},
+        "name": {"type": "string", "description": "Make and model, e.g. 'Darkglass Microtubes B7K'"},
+        "role": {"type": "string", "description": "What it does in this tone"},
+    }, "required": ["kind", "name"]}},
+}, ["description", "gear"])
 TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
                                     "the research and brief (leave pack_id out) or one pack. It improves future "
                                     "results for everyone.", {

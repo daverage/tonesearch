@@ -308,6 +308,7 @@ It should call the tools: usually `web_research`, then a few `search_packs` call
 | `lookup` | Exact slugs for the makes, tags and creators filters |
 | `list_pack_models` | The model files in a pack |
 | `download_link` | The pack's TONE3000 page, to download it from |
+| `save_gear` | Saves the gear the assistant worked out from fresh research, so the library entry has a gear list like website searches do |
 | `rate_result` | Saves the user's verdict on the research or a pack |
 
 The `find_tone` prompt walks the assistant through the full research → search → rank workflow.

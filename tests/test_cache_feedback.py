@@ -195,3 +195,19 @@ def test_mcp_says_whether_a_saved_answer_was_checked(calls):
     knowledge.update(app_module._library(), entry["id"], topic=entry["topic"], notes=entry["notes"], gear=[], status="approved")
     _search(client, "Periphery bass")  # the edit cleared saved answers; this saves one again
     assert "The site owner has checked" in mcp_server.web_research("periphery bass", notes=lambda text: NOTES)
+
+
+def test_mcp_save_gear_fills_an_empty_gear_list_once(monkeypatch):
+    db = app_module._library()
+    mcp_server.web_research("Periphery bass Nolly", notes=lambda text: NOTES)
+    gear = [{"kind": "effect", "name": "Darkglass Microtubes B7K", "role": "drive for the highs"},
+            {"kind": "effect", "name": "Compressor"}, {"kind": "weird", "name": "Origin Effects Cali76"}]
+    assert mcp_server.save_gear("periphery bass nolly", gear).startswith("Saved 2 gear items")
+    entry = knowledge.find(db, "Periphery bass Nolly")
+    assert [g["name"] for g in entry["gear"]] == ["Darkglass Microtubes B7K", "Origin Effects Cali76"]
+    assert entry["gear"][1]["kind"] == "other"
+    assert "left as it is" in mcp_server.save_gear("periphery bass nolly", [{"kind": "amp", "name": "Ampeg SVT"}])
+    assert "call web_research first" in mcp_server.save_gear("Comfortably Numb", [{"kind": "amp", "name": "Hiwatt DR103"}])
+    mcp_server._CHECKED_KEYS[__import__("hashlib").sha256(b"t3k_cs_user").hexdigest()] = time.time()
+    result = mcp_server.call_tool("save_gear", {"description": "x", "gear": [{"kind": "effect", "name": "Delay"}]}, "t3k_cs_user")
+    assert result["isError"] and "not categories" in result["content"][0]["text"]

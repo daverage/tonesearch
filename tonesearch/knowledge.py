@@ -76,7 +76,7 @@ def _best_effort(function):
 
 
 @_best_effort
-def find(db: Path, text: str) -> dict | None:
+def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
     """The best usable entry for a request, or None when its identity words don't overlap strongly enough.
 
     A request with no identity words (only descriptions, or a band called Low) matches nothing: the failure
@@ -98,7 +98,8 @@ def find(db: Path, text: str) -> dict | None:
                 best, best_key = row, key
         if best is None:
             return None
-        connection.execute("UPDATE entries SET uses = uses + 1 WHERE id = ?", (best["id"],))
+        if count_use:
+            connection.execute("UPDATE entries SET uses = uses + 1 WHERE id = ?", (best["id"],))
     return {**_entry(best), "score": round(best_key[0], 2)}
 
 
