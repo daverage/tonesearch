@@ -135,7 +135,7 @@ def test_catalogue_results_are_shared_but_download_links_are_never_cached(tmp_pa
     for _ in range(2):
         assert research.tone3000_search("Vox AC30", opener=opener, cache_db=db)[0]["id"] == 9
         models = research.tone3000_models(9, opener=opener, cache_db=db)
-    assert len(hits) == 2 and "model_url" not in models[0] and "sig=" not in str(cache.get(db, "models:9:2"))
+    assert len(hits) == 2 and "model_url" not in models[0] and "sig=" not in str(cache.get(db, "models:9:2", cache.REFERENCE_SECONDS))
 
 
 def test_mcp_rate_result_saves_feedback_and_reports_research():
@@ -148,7 +148,7 @@ def test_mcp_rate_result_saves_feedback_and_reports_research():
                                                   "comment": "Bad Cat, not JCM800"}, key)
     assert not result["isError"]
     assert knowledge.get(db, entry_id)["status"] == "flagged"
-    assert cache.get(db, "plan:absentia porcupine tree:True") is None
+    assert cache.get(db, "plan:absentia porcupine tree:True", cache.AI_SECONDS) is None
     vote = feedback.recent(db)[0]
     assert vote["source"] == "mcp" and vote["vote"] == -1 and vote["voter"] != key and vote["entry_id"] == entry_id
 
@@ -160,3 +160,16 @@ def test_admin_feedback_view(monkeypatch):
     auth = {"Authorization": "Basic " + base64.b64encode(b"o:pw").decode()}
     page = app_module.app.test_client().get("/admin?view=feedback", headers=auth).get_data(as_text=True)
     assert "needs the Dumble" in page and "srv texas flood" in page
+
+
+def test_new_packs_appear_after_a_day_without_asking_the_ai_again(calls, monkeypatch):
+    client = app_module.app.test_client()
+    _search(client)
+    monkeypatch.setattr(cache, "CATALOGUE_SECONDS", 0)  # a day later: catalogue results and whole answers expire
+    monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [{"id": 3, "title": "New Bad Cat", "match_score": 9}])
+    later = _search(client)
+    assert not later["cached"] and [p["id"] for p in later["results"]] == [3]
+    assert calls["plan"] == 1 and calls["web"] == 1 and calls["rank"] == 2  # new pack set: ranked once more
+    monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [{"id": 3, "title": "New Bad Cat", "match_score": 9}])
+    _search(client)
+    assert calls["plan"] == 1 and calls["rank"] == 2  # same packs again: the saved ranking is reused

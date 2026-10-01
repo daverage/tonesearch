@@ -314,7 +314,7 @@ def api_search():
     reusable = bool(words) and not history and reuse is None
     result_key = f"result:{words}:{use_web}:{json.dumps(filters, sort_keys=True)}"
     if reusable and not fresh:
-        saved = cache.get(_library(), result_key)
+        saved = cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
         if saved:
             feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
             return jsonify({**saved, "cached": True})  # no AI, web or TONE3000 calls, so no hourly limit spent
@@ -339,7 +339,7 @@ def api_search():
                 warnings.append(f"Web research unavailable: {exc}")
     plan_key = f"plan:{words}:{use_web}"
     if plan is None and reusable and not fresh and not fresh_research:
-        plan = cache.get(_library(), plan_key)
+        plan = cache.get(_library(), plan_key, cache.AI_SECONDS)
     try:
         if plan is None:
             plan = ai.plan_tone(prompt, research_notes=research, history=history,
@@ -373,7 +373,7 @@ def api_search():
     packs = _shortlist(packs, filters["sort"])
     if packs:
         rank_key = f"rank:{words}:{use_web}:{','.join(str(p['id']) for p in sorted(packs, key=lambda p: p['id']))}"
-        scores = cache.get(_library(), rank_key) if reusable and not fresh else None
+        scores = cache.get(_library(), rank_key, cache.AI_SECONDS) if reusable and not fresh else None
         if scores is None:
             scores = {}
             if deadline - time.monotonic() < 8:

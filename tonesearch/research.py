@@ -508,7 +508,7 @@ def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str 
         tones = payload.get("data", []) if isinstance(payload, dict) else []
         return [tone for tone in tones if isinstance(tone, dict)]
     # Public catalogue data, the same for every key, so it's shared between visitors and the MCP server.
-    tones = cache.remember(cache_db, "search:" + json.dumps(params, sort_keys=True), fetch)
+    tones = cache.remember(cache_db, "search:" + json.dumps(params, sort_keys=True), fetch, cache.CATALOGUE_SECONDS)
     results = []
     for position, tone in enumerate(tones):
         # An id-less entry can never be turned into a working discuss/download
@@ -585,7 +585,7 @@ def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", opener=ur
 def tone3000_models(tone_id: int, *, architecture: str = "2", opener=urlopen, cache_db=None) -> list[dict]:
     """Return model names for one public TONE3000 tone pack, never credentials or download links."""
     key = f"models:{tone_id}:{architecture}"
-    saved = cache.get(cache_db, key)
+    saved = cache.get(cache_db, key, cache.REFERENCE_SECONDS)
     if saved:
         return saved
     models = _tone3000_model_names(tone_id, architecture, opener)
@@ -717,7 +717,7 @@ def tone3000_lookup(kind: str, query: str, *, opener=urlopen, cache_db=None) -> 
     """Catalogue suggestions for the filter fields: [{"value", "label", "count"}], most used first."""
     if cache_db is not None:
         key = f"lookup:{kind}:{query.lower()}"
-        saved = cache.get(cache_db, key)
+        saved = cache.get(cache_db, key, cache.REFERENCE_SECONDS)
         if saved is None:
             saved = _tone3000_lookup(kind, query, opener=opener)
             cache.put(cache_db, key, saved)

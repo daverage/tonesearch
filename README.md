@@ -332,14 +332,17 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 
 ## Saved answers and ratings
 
-TONE Search saves its work so repeat searches are instant and cost nothing. Everything is stored in `data/knowledge.sqlite3` next to the research library, and kept for `TONESEARCH_CACHE_DAYS` (3 by default).
+TONE Search saves its work so repeat searches are instant and cost nothing. Everything is stored in `data/knowledge.sqlite3` next to the research library. TONE3000 results are kept briefly so new packs appear; the AI's work is kept for much longer, because it only changes when the research does.
 
-| Saved | Reused when | Skips |
-|---|---|---|
-| The whole answer: brief, packs and ranking | The same tone (same topic words, any order) with the same filters and research setting | The AI, web research and TONE3000 |
-| The AI's tone plan | The same tone with different filters | The planning AI call |
-| The AI's ranking | The same tone and the same packs | The ranking AI call |
-| TONE3000 search results, pack file lists and filter suggestions | Any visitor or MCP user asks the same thing | TONE3000 requests |
+| Saved | Kept for | Reused when | Skips |
+|---|---|---|---|
+| TONE3000 search results | 1 day (`TONESEARCH_CATALOGUE_HOURS`) | Any visitor or MCP user makes the same catalogue search | TONE3000 requests |
+| The whole answer: brief, packs and ranking | 1 day, the same as search results, because it contains them | The same tone (same topic words, any order) with the same filters and research setting | The AI, web research and TONE3000 |
+| The AI's tone plan | 30 days (`TONESEARCH_AI_CACHE_DAYS`) | The same tone, whatever the filters | The planning AI call |
+| The AI's ranking | 30 days | The same tone and exactly the same packs | The ranking AI call |
+| Pack file lists and filter suggestions | 7 days | Anyone asks for the same pack or suggestion | TONE3000 requests |
+
+So after a day, a known tone costs a few quick TONE3000 searches and no AI. If a new pack has appeared, the AI ranks the new set once, and that ranking is then saved too.
 
 Only a first search uses saved answers; a refinement depends on the whole conversation. Answers with warnings, such as a skipped ranking, are never saved. A saved answer says so under the brief, with a **Search again** button that works it out from scratch. Saved answers don't count against the hourly search limit. Pack file lists are saved without their download links, which may expire.
 
@@ -393,7 +396,8 @@ Visitors using their own AI provider can set the same values under **Settings â†
 | `TONESEARCH_SEARCHES_PER_HOUR` | 12 | Searches per visitor per hour (0 = no limit) |
 | `TONESEARCH_ADMIN_PASSWORD` | none | Turns on the research library's review page at `/admin` |
 | `TONESEARCH_LIBRARY_DAYS` | 30 | Days unreviewed library research is reused before it's searched again |
-| `TONESEARCH_CACHE_DAYS` | 3 | Days saved answers and TONE3000 results are reused |
+| `TONESEARCH_CATALOGUE_HOURS` | 24 | Hours TONE3000 search results and whole answers are reused |
+| `TONESEARCH_AI_CACHE_DAYS` | 30 | Days the AI's plans and rankings are reused |
 | `TONESEARCH_FEEDBACK_SALT` | built in | Salt for hashing voters; set your own secret value |
 | `TONESEARCH_MCP_CALLS_PER_HOUR` | 120 | Hosted MCP tool calls per IP per hour (0 = no limit) |
 | `TONESEARCH_MCP_RESEARCH_PER_HOUR` | same as searches | Hosted MCP `web_research` calls per IP per hour |
