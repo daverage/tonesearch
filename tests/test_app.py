@@ -665,3 +665,19 @@ def test_web_notes_take_one_page_per_site():
     notes = research.web_notes("SRV tone", search=lambda *a, **k: pages, evidence=evidence)
     assert fetched == ["https://tonesite.example/song-0", "https://forum.example/thread"]
     assert notes.count("\n") == 1
+
+
+def test_evidence_needs_the_topic_and_real_gear():
+    topic = {"porcupine", "tree", "absentia"}
+    assert research._sentence_score("NAM Rig replicates the sound and feel of real amps, pedals and cabs.", topic) == 0
+    assert research._sentence_score("In Absentia is the seventh studio album by Porcupine Tree, recorded in 2002.", topic) == 0
+    assert research._sentence_score("For the album, the guitar parts on In Absentia were played through a Bad Cat amp and a cranked head.", topic) > 0
+
+
+def test_evidence_on_a_page_about_the_topic_may_say_their():
+    sentence = "Start with their go-to gear (a Mesa Dual Rectifier and a Bad Cat Hot Cat 100) and a starting EQ."
+    topic = {"porcupine", "tree", "absentia"}
+    assert research._sentence_score(sentence, topic) == 0
+    assert research._sentence_score(sentence, topic, page_on_topic=True) > 0
+    page = f"<title>Porcupine Tree guitar tone</title><p>{sentence}</p>"
+    assert "Bad Cat" in research._extract_evidence(page, "Porcupine Tree Absentia")

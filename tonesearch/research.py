@@ -153,9 +153,13 @@ _GEAR_WORDS = {
     "twin", "deluxe", "champ", "bassman", "princeton", "stratocaster", "strat", "telecaster", "tele", "gibson",
     "sg", "explorer", "flying", "humbucker", "humbuckers", "pickup", "pickups", "p90", "pedal", "pedals", "fuzz",
     "overdrive", "distortion", "wah", "screamer", "rangemaster", "booster", "univibe", "leslie", "reverb",
-    "tremolo", "echo", "delay", "echoplex", "recorded", "recording", "studio", "session", "played", "plugged",
-    "used", "cranked", "gain", "valve", "tube", "tubes",
+    "tremolo", "echo", "delay", "echoplex", "valve", "tube", "tubes", "rectifier", "jcm800", "soldano", "engl",
+    "bogner", "friedman", "laney", "matchless", "muff", "klon", "prs", "ibanez", "schecter", "compressor", "chorus",
+    "flanger", "phaser",
 }
+_GEAR_PHRASES = ("les paul", "bad cat", "pro co rat", "big muff", "tube screamer", "dual rectifier")
+# Words that support gear evidence but don't name any equipment ("recorded in the studio").
+_CONTEXT_WORDS = {"recorded", "recording", "studio", "session", "played", "plugged", "used", "cranked", "gain", "rig"}
 _FILLER_WORDS = {
     "i", "im", "i'm", "id", "i'd", "would", "like", "want", "wanted", "need", "looking", "look", "for", "find",
     "a", "an", "the", "tone", "tones", "sound", "sounds", "sounding", "that", "which", "to", "of", "on", "in",
@@ -183,7 +187,7 @@ def _skip_source(href: str) -> bool:
                            for pattern in _SKIP_HOSTS)
 
 
-def _sentence_score(sentence: str, topic_words: set) -> int:
+def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False) -> int:
     """0 for menus and boilerplate; otherwise topic hits (weighted) plus distinct gear words."""
     words = re.findall(r"[a-z0-9']+", sentence.lower())
     if len(words) < 7 or len(sentence) > 450:
@@ -197,9 +201,14 @@ def _sentence_score(sentence: str, topic_words: set) -> int:
     capitalised = sum(1 for w in re.findall(r"[A-Za-z][\w']*", sentence) if w[0].isupper())
     if capitalised > len(words) * 0.5:  # Title Case runs are menus, headings and tag lists
         return 0
-    gear = len(set(words) & _GEAR_WORDS) + (1 if "les paul" in sentence.lower() else 0)
+    gear = len(set(words) & _GEAR_WORDS) + sum(phrase in sentence.lower() for phrase in _GEAR_PHRASES)
     topic = len(set(words) & topic_words)
-    return (topic * 2 + gear) if (topic and gear) or gear >= 3 else 0
+    # A product page lists gear without the artist and an album intro names the artist without gear, so a
+    # sentence needs both, unless the page is about the topic and the sentence names gear twice ("their go-to
+    # gear: a Dual Rectifier and a Bad Cat").
+    if not gear or not (topic or (page_on_topic and gear >= 2)):
+        return 0
+    return topic * 2 + gear + len(set(words) & _CONTEXT_WORDS)
 
 
 def _extract_evidence(html: str, topic: str) -> str:
@@ -207,14 +216,17 @@ def _extract_evidence(html: str, topic: str) -> str:
     parser = _PageText()
     parser.feed(html)
     topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
+    text = "".join(parser.parts)
+    opening = set(re.findall(r"[a-z0-9']+", text[:3000].lower()))  # title and first lines say what a page is about
+    page_on_topic = len(opening & topic_words) >= min(2, len(topic_words))
     candidates, seen = [], set()
-    for block in "".join(parser.parts).split("\n"):
+    for block in text.split("\n"):
         block = re.sub(r"\s+", " ", block).strip()
         for sentence in re.split(r"(?<=[.!?])\s+", block):
             sentence = sentence.strip()
             if sentence.lower() in seen:  # pages often repeat a line (summary box + body)
                 continue
-            if sentence[-1:] in ".!?\"”)" and (score := _sentence_score(sentence, topic_words)):
+            if sentence[-1:] in ".!?\"”)" and (score := _sentence_score(sentence, topic_words, page_on_topic)):
                 seen.add(sentence.lower())
                 candidates.append((score, len(candidates), sentence))
     best = sorted(sorted(candidates, reverse=True)[:3], key=lambda c: c[1])
@@ -295,7 +307,7 @@ def _search_retrying(search, query: str, deadline: float, attempts=SEARCH_ATTEMP
             break
         time.sleep(pause)
         try:
-            results = search(query, 6, backend=backend, timeout=max(2, min(10, int(remaining))))
+            results = search(query, 10, backend=backend, timeout=max(2, min(10, int(remaining))))
         except RuntimeError as exc:
             if str(exc) == _MISSING_DDGS:  # the package is missing: retrying cannot help
                 raise
@@ -313,7 +325,9 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     """Return up to MAX_SOURCES notes of documented gear for the request, one "- title: text (url)" line each."""
     topic = _topic(query)
     deadline = time.monotonic() + RESEARCH_SEARCH_SECONDS
-    queries = (f"{topic} guitar rig amp used recording", f"{topic} equipment gear equipboard")
+    # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
+    # unrelated shops; these two found forums, interviews and gear write-ups instead.
+    queries = (f"{topic} guitarist amp pedals gear used", f"{topic} guitarist interview amplifier gear")
     with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
         outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
     if not any(found for found, _ in outcomes):
@@ -334,7 +348,7 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
                            + (f" ({errors[-1]}); they may be limiting this server for a moment" if errors else " for this request")
                            + ". The search continued without it.")
 
-    candidates = results[:8]
+    candidates = results[:10]  # several pages have no usable text (blocked or built by JavaScript)
     with ThreadPoolExecutor(max_workers=len(candidates) or 1) as pool:
         extracts = list(pool.map(lambda r: evidence(str(r.get("href", "")).strip(), topic), candidates))
     topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
