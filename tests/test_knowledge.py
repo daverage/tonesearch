@@ -105,3 +105,18 @@ def test_admin_page_needs_the_password_and_same_site_posts(monkeypatch, db):
     assert entry["status"] == "approved" and entry["gear"][0]["name"] == "Fender Vibroverb"
     client.post(f"/admin/entries/{entry_id}", data={"action": "delete"}, headers=same_site)
     assert knowledge.search(db) == []
+
+
+def test_fresh_research_keeps_a_report_for_review(db):
+    entry_id = knowledge.save(db, "Texas Flood SRV", NOTES)
+    knowledge.flag(db, entry_id, "wrong amp")
+    knowledge.save(db, "SRV Texas Flood", "- b: fresher notes. (https://example.com/b)")
+    entry = knowledge.search(db)[0]
+    assert entry["status"] == "flagged" and entry["flag_reason"] == "wrong amp" and "fresher" in entry["notes"]
+
+
+def test_a_broken_library_never_stops_research(monkeypatch, tmp_path):
+    missing = tmp_path / "no" / "such" / "dir" / "k.sqlite3"
+    assert knowledge.find(missing, "SRV") is None and knowledge.save(missing, "SRV", NOTES) is None
+    monkeypatch.setattr(mcp_server, "library_path", lambda: missing)
+    assert mcp_server.web_research("SRV Texas Flood", notes=lambda text: NOTES) == NOTES

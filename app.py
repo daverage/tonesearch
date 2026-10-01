@@ -187,7 +187,8 @@ def mcp_endpoint():
     key = (auth[7:] if auth.lower().startswith("bearer ")
            else request.headers.get("X-TONE3000-Key") or request.args.get("key", "")).strip()
     if message.get("method") == "tools/call":
-        name = (message.get("params") or {}).get("name")
+        params = message.get("params")
+        name = params.get("name") if isinstance(params, dict) else None
         if _over_limit("mcp") or (name == "web_research" and _over_limit("mcp_research")):
             reply = mcp_server._error(message.get("id"), -32000, (
                 "This hour's limit for the hosted TONE Search MCP server has been reached. Try again later, "

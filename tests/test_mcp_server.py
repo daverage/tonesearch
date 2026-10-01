@@ -129,3 +129,14 @@ def test_hosted_endpoint_accepts_key_in_url(monkeypatch):
 def test_download_link_is_the_tone3000_pack_page():
     result = call("download_link", {"pack_id": 5})
     assert not result["isError"] and result["content"][0]["text"] == "https://www.tone3000.com/tones/5"
+
+
+def test_malformed_messages_get_errors_not_crashes(monkeypatch):
+    reply = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1]}, "t3k_cs_user")
+    assert reply["error"]["code"] == -32602
+    monkeypatch.setitem(mcp_server.TOOLS, "lookup", (
+        lambda kind, text: 1 / 0, *mcp_server.TOOLS["lookup"][1:]))
+    result = call("lookup", {"kind": "makes", "text": "vox"})
+    assert result["isError"] and "ZeroDivisionError" in result["content"][0]["text"]
+    client = app_module.app.test_client()
+    assert client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": "x"}).status_code == 200

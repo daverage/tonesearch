@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import time
-
 from pathlib import Path
 
 from tonesearch import knowledge, overrides, research
@@ -173,6 +172,10 @@ def call_tool(name: str, arguments: dict, key: str, **injected) -> dict:
             overrides.activate({})
     except RuntimeError as exc:
         return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
+    except Exception as exc:  # a bug must not end the local server's loop or hide the reason from the caller
+        print(f"MCP tool {name} failed: {exc!r}", file=sys.stderr)
+        return {"content": [{"type": "text", "text": f"{name} failed unexpectedly ({type(exc).__name__})."}],
+                "isError": True}
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
     return {"content": [{"type": "text", "text": text}], "isError": False}
 
@@ -183,7 +186,8 @@ def handle(message, key: str) -> dict | None:
         return _error(None, -32600, "Invalid request")
     if "id" not in message:
         return None
-    ident, method, params = message["id"], message["method"], message.get("params") or {}
+    ident, method, params = message["id"], message["method"], message.get("params")
+    params = params if isinstance(params, dict) else {}
     if method == "initialize":
         asked = params.get("protocolVersion")
         return _result(ident, {
@@ -237,6 +241,9 @@ def main() -> None:
             reply = handle(json.loads(line), key)
         except json.JSONDecodeError:
             reply = _error(None, -32700, "Parse error")
+        except Exception as exc:  # keep serving: one bad message must not end the session
+            print(f"MCP message failed: {exc!r}", file=sys.stderr)
+            reply = _error(None, -32603, "Internal error")
         if reply is not None:
             sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
             sys.stdout.flush()

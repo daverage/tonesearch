@@ -216,11 +216,16 @@
       details.append(list);
       brief.append(details);
     }
-    const meta = el("p", "t3ai-meta", `Searched TONE3000 for ${data.queries.map((q) => `"${q}"`).join(", ")}${data.researched ? " after web research" : ""}.${answeredBy(data.ai)}`);
+    const meta = el("p", "t3ai-meta", `Searched TONE3000 for ${data.queries.map((q) => `"${q}"`).join(", ")}${researchedLabel(data)}.${answeredBy(data.ai)}`);
     brief.append(meta);
     if (data.research_notes) brief.append(researchNotes(data.research_notes, data.library));
     data.warnings.forEach((w) => brief.append(el("p", "t3ai-warning", w)));
     pending.replaceWith(brief);
+  }
+
+  function researchedLabel(data) {
+    if (!data.researched) return "";
+    return data.library && data.library.reused ? " using saved research" : " after web research";
   }
 
   // Names the AI behind a reply when it is local or the visitor's own; this site's own model is not shown.
@@ -740,7 +745,7 @@
         });
       }
       if (data.plan.advice.length) out.push("**How to get there**", "", ...data.plan.advice.map((tip) => `- ${md(tip)}`), "");
-      out.push(`Searched TONE3000 for ${data.queries.map((q) => `"${md(q)}"`).join(", ")}${data.researched ? " after web research" : ""}. Filters: ${md(filters.describe(data.filters))}.${md(answeredBy(data.ai))}`, "");
+      out.push(`Searched TONE3000 for ${data.queries.map((q) => `"${md(q)}"`).join(", ")}${researchedLabel(data)}. Filters: ${md(filters.describe(data.filters))}.${md(answeredBy(data.ai))}`, "");
       if (data.research_notes) {
         out.push("**Web research sources**", "");
         data.research_notes.split("\n").filter(Boolean).forEach((line) => {

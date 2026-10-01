@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -44,6 +45,19 @@ def _entry(row) -> dict:
     return {**dict(row), "gear": json.loads(row["gear"] or "[]")}
 
 
+def _best_effort(function):
+    """The library only saves work: if its database fails, research carries on without it."""
+    def run(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except sqlite3.Error as exc:
+            print(f"Research library unavailable: {exc}", file=sys.stderr)
+            return None
+    run.__name__, run.__doc__ = function.__name__, function.__doc__
+    return run
+
+
+@_best_effort
 def find(db: Path, text: str) -> dict | None:
     """The best usable entry for a request, or None when nothing overlaps strongly enough."""
     wanted = set(topic_words(text))
@@ -65,6 +79,7 @@ def find(db: Path, text: str) -> dict | None:
     return {**_entry(best), "score": round(best_key[0], 2)}
 
 
+@_best_effort
 def save(db: Path, text: str, notes: str, gear: list | None = None) -> int | None:
     """Store fresh research for a topic. An approved entry is never overwritten; others are refreshed."""
     words = " ".join(topic_words(text))
@@ -79,12 +94,13 @@ def save(db: Path, text: str, notes: str, gear: list | None = None) -> int | Non
                 "INSERT INTO entries (topic, words, notes, gear, created, updated) VALUES (?, ?, ?, ?, ?, ?)",
                 (_topic(text)[:200], words, notes[:6000], gear_json, now, now))
             return cursor.lastrowid
-        if row["status"] != "approved":
-            connection.execute("UPDATE entries SET notes = ?, gear = ?, status = 'new', updated = ? WHERE id = ?",
+        if row["status"] != "approved":  # a flagged entry stays flagged until the owner reviews it
+            connection.execute("UPDATE entries SET notes = ?, gear = ?, updated = ? WHERE id = ?",
                                (notes[:6000], gear_json if gear else row["gear"], now, row["id"]))
         return row["id"]
 
 
+@_best_effort
 def add_gear(db: Path, entry_id: int, gear: list) -> None:
     """Fill in the gear for an entry saved without it (MCP research has no AI to read the notes)."""
     if gear:
