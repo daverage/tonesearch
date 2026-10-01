@@ -30,6 +30,24 @@ def topic_words(text: str) -> list[str]:
     return sorted(w for w in words if len(w) > 1 and w not in _GENERIC)
 
 
+# How a tone sounds, not whose rig it is: "Periphery bass, compressed distorted highs" uses the same bassist's
+# gear as "Periphery bass", so research is matched without these. Era, live, song and album words stay, and so
+# does "bass" (a bassist's rig is not the guitarist's). Saved briefs and feedback still use every word.
+_DESCRIPTIONS = {
+    "compressed", "compression", "distorted", "distortion", "overdriven", "driven", "fuzzy", "saturated", "clean",
+    "clear", "clarity", "defined", "definition", "articulate", "tight", "loose", "warm", "bright", "dark", "heavy",
+    "crunchy", "crunch", "fat", "thick", "thin", "scooped", "mids", "mid", "midrange", "high", "highs", "low", "lows",
+    "frequencies", "frequency", "end", "gain", "gainy", "aggressive", "smooth", "sparkly", "chimey", "chimy",
+    "punchy", "punch", "growl", "growly", "gritty", "grit", "glassy", "spanky", "woolly", "creamy", "biting",
+    "but", "more", "less", "very", "little", "bit", "much", "lot", "slightly", "quite", "lots", "some", "kind",
+}
+
+
+def identity_words(words) -> set:
+    """The words that say whose rig a request is about: topic words without sound descriptions."""
+    return {w for w in words if w not in _DESCRIPTIONS}
+
+
 def _connect(db: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(db, timeout=5)
     connection.row_factory = sqlite3.Row
@@ -59,8 +77,11 @@ def _best_effort(function):
 
 @_best_effort
 def find(db: Path, text: str) -> dict | None:
-    """The best usable entry for a request, or None when nothing overlaps strongly enough."""
-    wanted = set(topic_words(text))
+    """The best usable entry for a request, or None when its identity words don't overlap strongly enough.
+
+    A request with no identity words (only descriptions, or a band called Low) matches nothing: the failure
+    is fresh research, never someone else's rig."""
+    wanted = identity_words(topic_words(text))
     if not wanted:
         return None
     oldest = time.time() - UNREVIEWED_DAYS * 86400
@@ -69,7 +90,9 @@ def find(db: Path, text: str) -> dict | None:
         rows = connection.execute(
             "SELECT * FROM entries WHERE status = 'approved' OR (status = 'new' AND updated >= ?)", (oldest,))
         for row in rows:
-            words = set(row["words"].split())
+            words = identity_words(row["words"].split())
+            if not words:
+                continue
             key = (len(wanted & words) / len(wanted | words), row["status"] == "approved")  # ties go to reviewed
             if key >= best_key:
                 best, best_key = row, key

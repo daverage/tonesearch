@@ -140,3 +140,24 @@ def test_admin_search_finds_entries_by_id_and_by_feedback_topic_words(db):
     assert [e["id"] for e in knowledge.search(db, f"#{entry_id}")] == [entry_id]
     words = " ".join(knowledge.topic_words("Periphery bass compressed distorted highs"))
     assert [e["id"] for e in knowledge.search(db, words)] == [entry_id]
+
+
+def test_research_is_matched_on_whose_rig_not_how_it_sounds(db):
+    knowledge.save(db, "Periphery bass compressed distorted high frequencies but clear defined low frequencies", NOTES)
+    assert knowledge.find(db, "Periphery bass")["notes"] == NOTES
+    assert knowledge.find(db, "periphery bass, warm and punchy") is not None
+    assert knowledge.find(db, "Periphery") is None  # the guitar rig is not the bass rig
+    assert knowledge.find(db, "Periphery guitar") is None
+
+
+def test_era_and_live_words_still_count(db):
+    knowledge.save(db, "Comfortably Numb", NOTES)
+    assert knowledge.find(db, "Comfortably Numb live Pompeii") is None
+    assert knowledge.find(db, "Comfortably Numb, warm and smooth") is not None
+
+
+def test_a_request_with_only_descriptions_matches_nothing(db):
+    knowledge.save(db, "Low guitar tone", NOTES)  # the band Low: its only identity word is a description
+    knowledge.save(db, "heavy distorted tone", NOTES)
+    assert knowledge.find(db, "Low guitar tone") is None
+    assert knowledge.find(db, "heavy distorted") is None
