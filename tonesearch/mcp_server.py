@@ -52,14 +52,11 @@ def _gear_line(g: dict) -> str:
 
 def _saved_answer(description: str) -> str:
     """The website's saved answer for the same rig: its brief and ranked packs, with players' votes."""
-    wanted = knowledge.identity_words(knowledge.topic_words(description))
-    if not wanted:
-        return ""
     best, best_score = None, 0.0
     for words, answer, created in cache.by_prefix(library_path(), "result:", cache.CATALOGUE_SECONDS):
-        theirs = knowledge.identity_words(words.split())
-        score = len(wanted & theirs) / len(wanted | theirs) if theirs else 0
-        if score >= knowledge.MATCH_THRESHOLD and score > best_score:  # rows come newest first: ties keep it
+        aliases = ", ".join(knowledge.clean_aliases((answer.get("plan") or {}).get("aliases")))
+        score = knowledge.match_score(description, words, aliases, same_sound=True)
+        if score > best_score:  # rows come newest first, so ties keep the newest
             best, best_score = (words, answer, created), score
     if best is None:
         return ""
@@ -146,7 +143,7 @@ def download_link(pack_id: int) -> str:
 GEAR_KINDS = ("amp", "effect", "guitar", "pickup", "cab", "other")
 
 
-def save_gear(description: str, gear: list) -> str:
+def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
     """Store the gear the assistant worked out from web_research, as the website's AI does for its searches.
 
     Only fills an empty gear list: never replaces gear the owner edited or the website's AI wrote."""
@@ -167,6 +164,8 @@ def save_gear(description: str, gear: list) -> str:
     entry = knowledge.find(library_path(), description, count_use=False)
     if not entry:
         return "There's no saved research for this tone yet: call web_research first."
+    if aliases and not entry.get("aliases"):
+        knowledge.add_aliases(library_path(), entry["id"], [str(a)[:60] for a in aliases[:8]])
     if entry["gear"]:
         return "This research already has a gear list, so it was left as it is."
     # Only gear the research itself names: the library records what sources say, not what an assistant recalls.
@@ -261,6 +260,9 @@ TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research not
                        "description": "confirmed: the notes document it for this recording or era; artist: documented "
                                       "for this player, other or unknown era; suggested: a modern equivalent or guess"},
     }, "required": ["kind", "name", "confidence"]}},
+    "aliases": {"type": "array", "maxItems": 8, "items": {"type": "string"},
+                "description": "Other names for the same rig: the player and nickname, band, song, album, era "
+                               "(e.g. 'Nolly', 'Adam Getgood'). Names only, no sound descriptions."},
 }, ["description", "gear"])
 TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
                                     "the research and brief (leave pack_id out) or one pack. It improves future "

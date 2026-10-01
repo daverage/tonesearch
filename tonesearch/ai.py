@@ -371,6 +371,7 @@ def _normalise(model, value: object) -> object:
         _alias(value, "advice", "tips", "how_to", "steps")
         _alias(value, "gear", "equipment", "rig", "products")
         _alias(value, "search_queries", "queries", "searches", "search_terms")
+        _alias(value, "aliases", "keywords", "names", "also_known_as", "identifiers")
         gear = []
         for item in value.get("gear") if isinstance(value.get("gear"), list) else []:
             if isinstance(item, str):
@@ -387,7 +388,8 @@ def _normalise(model, value: object) -> object:
                              "confidence": confidence_of(item.get("confidence"))})
         summary = value.get("summary")
         return {**value, "summary": summary if isinstance(summary, str) else "", "gear": gear[:12],
-                "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6)}
+                "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6),
+                "aliases": _text_list(value.get("aliases"), 16)}
     if model is _PackAnswer:
         value = _unwrap(value, {"reply"})
         _alias(value, "reply", "answer", "response", "text", "message")
@@ -638,6 +640,7 @@ class _Plan(_Model):
     advice: List[str] = Field(default_factory=list, max_length=8)
     gear: List[_Gear] = Field(default_factory=list, max_length=12)
     search_queries: List[str] = Field(default_factory=list, max_length=6)
+    aliases: List[str] = Field(default_factory=list, max_length=16)
 
 
 class _Rank(_Model):
@@ -690,6 +693,7 @@ _PLAN_SCHEMA = {
             "name": {"type": "string"}, "role": {"type": "string"},
             "confidence": {"type": "string", "enum": list(CONFIDENCE)}}, "required": ["kind", "name", "confidence"]}},
         "search_queries": {"type": "array", "items": {"type": "string"}},
+        "aliases": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["summary", "advice", "gear", "search_queries"],
 }
@@ -803,6 +807,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "one; if it is uncertain, still name the researched one and say so in its role. Ignore gear that a tone-settings "
         "site recommends for recreating the sound today (modelling or practice amps such as a Fender Mustang, Boss "
         "Katana or Positive Grid Spark) unless the player asks for budget or modern gear.\n"
+        "- aliases: up to 8 other names someone might use to ask for this same rig: the player's name and nickname, "
+        "the band, the song, the album, the era or year (e.g. for 'Periphery bass': 'Nolly', 'Adam Getgood', "
+        "'Periphery'). Only names that research or well-known facts support; no sound descriptions, no gear.\n"
         "- search_queries: 1-3 SHORT TONE3000 catalogue searches for the kind of capture the player wants. Usually that "
         "is the amp (make/model or amp family, e.g. 'Marshall JCM800', 'Fender Deluxe Reverb', 'Vox AC30'), matching "
         "the amps in gear. But TONE3000 also has captures of pedals, preamps, outboard gear, bass rigs and acoustic "
@@ -842,6 +849,7 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "advice": [tip.strip() for tip in plan.advice if tip.strip()][:6],
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
         "search_queries": queries[:3],
+        "aliases": [a.strip()[:60] for a in plan.aliases if a.strip()][:8],
     }
 
 

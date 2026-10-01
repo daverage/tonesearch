@@ -48,6 +48,38 @@ def identity_words(words) -> set:
     return {w for w in words if w not in _DESCRIPTIONS}
 
 
+def clean_aliases(aliases) -> list[str]:
+    """Up to 12 short names (people, bands, songs, albums, eras) with their description words removed."""
+    cleaned = []
+    for alias in aliases if isinstance(aliases, list) else []:
+        words = [w for w in topic_words(str(alias)) if w not in _DESCRIPTIONS]
+        if words and len(" ".join(words)) <= 60:
+            cleaned.append(" ".join(words))
+    return list(dict.fromkeys(cleaned))[:12]
+
+
+def match_score(text: str, words: str, aliases: str = "", *, same_sound: bool = False) -> float:
+    """How well a request matches saved work for `words` (plus its aliases); 0 when it doesn't.
+
+    Either the two topics' identity words overlap by MATCH_THRESHOLD, or (using the aliases) every one of the
+    request's identity words, at least two, is a name the saved work goes by: so "Nolly Getgood bass" finds
+    "Periphery bass", but "Periphery" alone and "Nolly bass Juggernaut" (an era it may not cover) don't. With `same_sound`, the request
+    may not add description words the saved work lacks ("warm and clean" wants its own brief)."""
+    asked = topic_words(text)
+    wanted, theirs = identity_words(asked), identity_words(words.split())
+    if not wanted or not theirs:
+        return 0.0
+    if same_sound and set(asked) - wanted - set(words.split()):
+        return 0.0
+    overlap = len(wanted & theirs) / len(wanted | theirs)
+    if overlap >= MATCH_THRESHOLD:
+        return overlap
+    known = theirs | set(aliases.replace(",", " ").split())
+    if len(wanted) >= 2 and wanted <= known:
+        return MATCH_THRESHOLD - 0.01  # below any direct overlap
+    return 0.0
+
+
 def _connect(db: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(db, timeout=5)
     connection.row_factory = sqlite3.Row
@@ -56,6 +88,9 @@ def _connect(db: Path) -> sqlite3.Connection:
         gear TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'new', flags INTEGER NOT NULL DEFAULT 0,
         flag_reason TEXT NOT NULL DEFAULT '', uses INTEGER NOT NULL DEFAULT 0, created REAL NOT NULL,
         updated REAL NOT NULL)""")
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
+    if "aliases" not in columns:  # added later: the AI's names for the same rig ("nolly", "steven wilson")
+        connection.execute("ALTER TABLE entries ADD COLUMN aliases TEXT NOT NULL DEFAULT ''")
     return connection
 
 
@@ -81,20 +116,17 @@ def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
 
     A request with no identity words (only descriptions, or a band called Low) matches nothing: the failure
     is fresh research, never someone else's rig."""
-    wanted = identity_words(topic_words(text))
-    if not wanted:
+    if not identity_words(topic_words(text)):
         return None
     oldest = time.time() - UNREVIEWED_DAYS * 86400
-    best, best_key = None, (MATCH_THRESHOLD, False)
+    best, best_key = None, (0.0, False)
     with _connect(db) as connection:
         rows = connection.execute(
             "SELECT * FROM entries WHERE status = 'approved' OR (status = 'new' AND updated >= ?)", (oldest,))
         for row in rows:
-            words = identity_words(row["words"].split())
-            if not words:
-                continue
-            key = (len(wanted & words) / len(wanted | words), row["status"] == "approved")  # ties go to reviewed
-            if key >= best_key:
+            score = match_score(text, row["words"], row["aliases"])
+            key = (score, row["status"] == "approved")  # ties go to reviewed entries
+            if score and key >= best_key:
                 best, best_key = row, key
         if best is None:
             return None
@@ -104,24 +136,35 @@ def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
 
 
 @_best_effort
-def save(db: Path, text: str, notes: str, gear: list | None = None) -> int | None:
+def save(db: Path, text: str, notes: str, gear: list | None = None, aliases: list | None = None) -> int | None:
     """Store fresh research for a topic. An approved entry is never overwritten; others are refreshed."""
     words = " ".join(topic_words(text))
     if not words or not notes.strip():
         return None
     now = time.time()
     gear_json = json.dumps((gear or [])[:12])
+    alias_words = ", ".join(clean_aliases(aliases))
     with _connect(db) as connection:
-        row = connection.execute("SELECT id, status, gear FROM entries WHERE words = ?", (words,)).fetchone()
+        row = connection.execute("SELECT id, status, gear, aliases FROM entries WHERE words = ?", (words,)).fetchone()
         if row is None:
             cursor = connection.execute(
-                "INSERT INTO entries (topic, words, notes, gear, created, updated) VALUES (?, ?, ?, ?, ?, ?)",
-                (_topic(text)[:200], words, notes[:6000], gear_json, now, now))
+                "INSERT INTO entries (topic, words, notes, gear, aliases, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_topic(text)[:200], words, notes[:6000], gear_json, alias_words, now, now))
             return cursor.lastrowid
         if row["status"] != "approved":  # a flagged entry stays flagged until the owner reviews it
-            connection.execute("UPDATE entries SET notes = ?, gear = ?, updated = ? WHERE id = ?",
-                               (notes[:6000], gear_json if gear else row["gear"], now, row["id"]))
+            connection.execute("UPDATE entries SET notes = ?, gear = ?, aliases = ?, updated = ? WHERE id = ?",
+                               (notes[:6000], gear_json if gear else row["gear"], alias_words or row["aliases"],
+                                now, row["id"]))
         return row["id"]
+
+
+@_best_effort
+def add_aliases(db: Path, entry_id: int, aliases: list) -> None:
+    """Fill in an entry's aliases when it has none (MCP research, or research saved before aliases existed)."""
+    alias_words = ", ".join(clean_aliases(aliases))
+    if alias_words:
+        with _connect(db) as connection:
+            connection.execute("UPDATE entries SET aliases = ? WHERE id = ? AND aliases = ''", (alias_words, entry_id))
 
 
 @_best_effort
@@ -164,7 +207,8 @@ def search(db: Path, text: str = "", status: str = "", limit: int = 200) -> list
         return [_entry(row) for row in connection.execute(sql, params)]
 
 
-def update(db: Path, entry_id: int, *, topic: str, notes: str, gear: list, status: str) -> None:
+def update(db: Path, entry_id: int, *, topic: str, notes: str, gear: list, status: str,
+           aliases: list | None = None) -> None:
     if status not in STATUSES:
         raise ValueError("unknown status")
     words = " ".join(topic_words(topic))
@@ -175,11 +219,11 @@ def update(db: Path, entry_id: int, *, topic: str, notes: str, gear: list, statu
         if clash:
             raise ValueError(f"Entry {clash['id']} already covers that topic.")
         connection.execute(
-            "UPDATE entries SET topic = ?, words = ?, notes = ?, gear = ?, status = ?, updated = ?,"
+            "UPDATE entries SET topic = ?, words = ?, notes = ?, gear = ?, aliases = ?, status = ?, updated = ?,"
             " flags = CASE WHEN ? = 'flagged' THEN flags ELSE 0 END,"
             " flag_reason = CASE WHEN ? = 'flagged' THEN flag_reason ELSE '' END WHERE id = ?",
-            (topic.strip()[:200], words, notes[:6000], json.dumps(gear[:12]), status, time.time(), status, status,
-             entry_id))
+            (topic.strip()[:200], words, notes[:6000], json.dumps(gear[:12]), ", ".join(clean_aliases(aliases or [])),
+             status, time.time(), status, status, entry_id))
 
 
 @_best_effort

@@ -279,7 +279,7 @@ def admin_entry(entry_id: int):
     else:
         try:
             knowledge.update(_library(), entry_id, topic=form.get("topic", ""), notes=form.get("notes", ""),
-                             gear=_parse_gear(form.get("gear", "")),
+                             gear=_parse_gear(form.get("gear", "")), aliases=form.get("aliases", "")[:600].split(","),
                              status="approved" if action == "approve" else form.get("status", "new"))
             message = f"Saved entry {entry_id}."
         except ValueError as exc:
@@ -322,7 +322,8 @@ def api_search():
     reusable = bool(words) and not history and reuse is None
     result_key = f"result:{words}:{use_web}:{json.dumps(filters, sort_keys=True)}"
     if reusable and not fresh:
-        saved = cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
+        saved = (cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
+                 or _saved_answer_by_alias(prompt, use_web, filters))
         if saved:
             feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
             return jsonify({**saved, "cached": True})  # no AI, web or TONE3000 calls, so no hourly limit spent
@@ -358,10 +359,13 @@ def api_search():
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
-        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"))
+        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"))
         library = knowledge.get(_library(), entry_id) if entry_id else None  # a reported entry stays flagged
-    elif library and not library["gear"]:
-        knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
+    elif library:
+        if not library["gear"]:
+            knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
+        if not library.get("aliases"):
+            knowledge.add_aliases(_library(), library["id"], plan.get("aliases") or [])
 
     queries = plan["search_queries"] or [prompt.strip()[:80]]
     rank_query = " ".join(queries)
@@ -401,7 +405,7 @@ def api_search():
         packs.sort(key=lambda p: (p.get("ai_fit", -1), p.get("match_score", 0), p.get("downloads_count") or 0), reverse=True)
     body = {"ai": ai.source(), "plan": plan, "queries": queries, "results": packs, "warnings": warnings,
             "researched": bool(research), "filters": filters, "reused_plan": reuse is not None,
-            "research_notes": research, "topic": topic, "saved_at": time.time(),
+            "research_notes": research, "topic": topic, "saved_at": time.time(), "use_web": use_web,
             "library": {"id": library["id"], "status": library["status"], "reused": not fresh_research}
             if library else None}
     if reusable and packs and not warnings:  # never save a partial answer
@@ -409,6 +413,20 @@ def api_search():
                   words)
     feedback.apply_votes(packs, feedback.pack_votes(_library(), words))
     return jsonify({**body, "cached": False})
+
+
+def _saved_answer_by_alias(prompt: str, use_web: bool, filters: dict) -> dict | None:
+    """A saved answer for the same rig under another name ("Nolly Getgood bass" for "Periphery bass"), with the
+    same filters and research setting, and no sound the saved one didn't describe."""
+    best, best_score = None, 0.0
+    for words, answer, _created in cache.by_prefix(_library(), "result:", cache.CATALOGUE_SECONDS):
+        if answer.get("use_web") != use_web or answer.get("filters") != filters:
+            continue
+        aliases = ", ".join(knowledge.clean_aliases((answer.get("plan") or {}).get("aliases")))
+        score = knowledge.match_score(prompt, words, aliases, same_sound=True)
+        if score > best_score:  # rows come newest first, so ties keep the newest
+            best, best_score = answer, score
+    return best
 
 
 @app.post("/api/feedback")

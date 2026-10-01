@@ -97,6 +97,8 @@
       {% if entry.flag_reason %}<p class="t3ai-warning">Reported: {{ entry.flag_reason }}</p>{% endif %}
       <label for="topic-{{ entry.id }}">Topic</label>
       <input id="topic-{{ entry.id }}" name="topic" value="{{ entry.topic }}" maxlength="200" style="width:100%;box-sizing:border-box">
+      <label for="aliases-{{ entry.id }}">Also known as (comma-separated names that find this research: player, band, song, album, era)</label>
+      <input id="aliases-{{ entry.id }}" name="aliases" value="{{ entry.aliases }}" maxlength="600" style="width:100%;box-sizing:border-box">
       <label for="gear-{{ entry.id }}">Gear (one per line: kind | name | role | confidence: confirmed, artist or suggested)</label>
       <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }} | {{ g.confidence or "artist" }}
 {% endfor %}</textarea>
