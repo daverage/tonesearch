@@ -121,14 +121,19 @@ def flag(db: Path, entry_id: int, reason: str = "") -> bool:
 # ---- Owner review ---------------------------------------------------------------------------------------------
 
 def search(db: Path, text: str = "", status: str = "", limit: int = 200) -> list[dict]:
-    """Entries for the admin page: flagged first, then newest; `text` matches topic, notes or gear."""
+    """Entries for the admin page: flagged first, then newest. `text` is "#8" for one entry, or words found in
+    its topic, notes, gear or topic words (the sorted form the feedback page links with)."""
     sql, params = "SELECT * FROM entries WHERE 1 = 1", []
     if status in STATUSES:
         sql += " AND status = ?"
         params.append(status)
-    if text.strip():
-        sql += " AND (topic LIKE ? OR notes LIKE ? OR gear LIKE ?)"
-        params += [f"%{text.strip()}%"] * 3
+    entry_id = re.fullmatch(r"#(\d+)", text.strip())
+    if entry_id:
+        sql += " AND id = ?"
+        params.append(int(entry_id.group(1)))
+    elif text.strip():
+        sql += " AND (topic LIKE ? OR notes LIKE ? OR gear LIKE ? OR words LIKE ?)"
+        params += [f"%{text.strip()}%"] * 4
     sql += " ORDER BY status = 'flagged' DESC, updated DESC LIMIT ?"
     params.append(limit)
     with _connect(db) as connection:

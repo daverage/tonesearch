@@ -132,3 +132,11 @@ def test_admin_actions_return_to_the_same_filter(monkeypatch, db):
             "filter_q": "flood", "filter_status": "new"}
     location = client.post(f"/admin/entries/{entry_id}", data=form, headers=headers).headers["Location"]
     assert "q=flood" in location and "status=new" in location and "message=" in location
+
+
+def test_admin_search_finds_entries_by_id_and_by_feedback_topic_words(db):
+    entry_id = knowledge.save(db, "Periphery bass compressed distorted highs", NOTES)
+    knowledge.save(db, "Texas Flood SRV", NOTES)
+    assert [e["id"] for e in knowledge.search(db, f"#{entry_id}")] == [entry_id]
+    words = " ".join(knowledge.topic_words("Periphery bass compressed distorted highs"))
+    assert [e["id"] for e in knowledge.search(db, words)] == [entry_id]

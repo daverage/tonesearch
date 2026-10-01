@@ -66,7 +66,7 @@
           <td>{{ v.created|datetime }}</td>
           <td class="{{ 'status-approved' if v.vote == 1 else 'status-flagged' }}">{{ "Good" if v.vote == 1 else "Bad" }}</td>
           <td>{{ v.prompt }}</td>
-          <td>{% if v.target == "pack" %}<a href="https://www.tone3000.com/tones/{{ v.pack_id }}" rel="noopener noreferrer" target="_blank">{{ v.pack_title or ("Pack " ~ v.pack_id) }}</a>{% else %}Tone brief{% if v.entry_id %} (<a href="admin?q={{ v.words|urlencode }}">research #{{ v.entry_id }}</a>){% endif %}{% endif %}</td>
+          <td>{% if v.target == "pack" %}<a href="https://www.tone3000.com/tones/{{ v.pack_id }}" rel="noopener noreferrer" target="_blank">{{ v.pack_title or ("Pack " ~ v.pack_id) }}</a>{% else %}Tone brief{% if v.entry_id %} (<a href="admin?q={{ ('#' ~ v.entry_id)|urlencode }}">research #{{ v.entry_id }}</a>){% endif %}{% endif %}</td>
           <td>{{ v.comment }}</td>
           <td>{{ "Website" if v.source == "web" else "MCP" }}</td>
         </tr>
@@ -78,7 +78,7 @@
     {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
 
     <form class="library-filters" method="get" action="admin">
-      <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear" aria-label="Search">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear, or #8 for one entry" aria-label="Search">
       <select name="status" aria-label="Status">
         <option value="">All ({{ counts.all }})</option>
         {% for name in statuses %}<option value="{{ name }}" {% if status == name %}selected{% endif %}>{{ name|capitalize }} ({{ counts[name] }})</option>{% endfor %}
