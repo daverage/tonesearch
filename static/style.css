@@ -140,6 +140,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); }
 .t3ai-research summary { cursor: pointer; font-weight: 600; }
 .t3ai-research ul { margin: 0.4rem 0 0; padding-left: 1.1rem; }
 .t3ai-research li { margin-bottom: 0.5rem; }
+.t3ai-report { margin-top: 0.2rem; font-size: 0.8rem; }
 .t3ai-research li p { margin: 0.15rem 0 0; color: var(--text-muted); overflow-wrap: anywhere; }
 .settings-limit { margin: 0 0 0.4rem; font-size: 0.85rem; }
 .settings-limit-status { margin: 0 0 1rem; padding: 0.45rem 0.6rem; border-radius: 6px; font-size: 0.85rem; background: var(--panel-alt); border: 1px solid var(--border); }

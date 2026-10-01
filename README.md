@@ -20,6 +20,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
   - [Option C: Any OpenAI-compatible API](#option-c-any-openai-compatible-api)
 - [Using the app](#using-the-app)
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
+- [Research library](#research-library)
 - [Configuration reference](#configuration-reference)
 - [Choosing a model](#choosing-a-model)
 - [Deploying](#deploying)
@@ -318,6 +319,15 @@ The `find_tone` prompt walks the assistant through the full research → search 
 
 ---
 
+## Research library
+
+Web research is saved in a research library (`data/knowledge.sqlite3`): the cited notes plus the gear the AI took from them. Before searching the web, a new search looks for a saved topic with a strong word overlap. "In Absentia Porcupine Tree" matches "Porcupine Tree In Absentia tone", but "Porcupine Tree Deadwing" doesn't. On a match, the search skips the web and uses the saved notes. The MCP server's `web_research` reads from and adds to the same library.
+
+- **Review:** set `TONESEARCH_ADMIN_PASSWORD` and open `/admin` (any username). You can search entries and edit their topic, notes and gear. **Approve** marks an entry as checked; approved entries never expire, and new research never overwrites them. Unreviewed entries are searched again after `TONESEARCH_LIBRARY_DAYS`.
+- **Reports:** visitors can press **Report wrong research** under the notes. A reported entry isn't reused until you review it, and it's listed first on the admin page with the reason.
+
+---
+
 ## Configuration reference
 
 All settings are environment variables.
@@ -357,6 +367,8 @@ Visitors using their own AI provider can set the same values under **Settings �
 |---|---:|---|
 | `TONE3000_API_KEY` | none | The server's TONE3000 secret key (`t3k_cs_…`) |
 | `TONESEARCH_SEARCHES_PER_HOUR` | 12 | Searches per visitor per hour (0 = no limit) |
+| `TONESEARCH_ADMIN_PASSWORD` | none | Turns on the research library's review page at `/admin` |
+| `TONESEARCH_LIBRARY_DAYS` | 30 | Days unreviewed library research is reused before it's searched again |
 | `TONESEARCH_MCP_CALLS_PER_HOUR` | 120 | Hosted MCP tool calls per IP per hour (0 = no limit) |
 | `TONESEARCH_MCP_RESEARCH_PER_HOUR` | same as searches | Hosted MCP `web_research` calls per IP per hour |
 | `TONESEARCH_CHATS_PER_HOUR` | 40 | Pack questions per visitor per hour |

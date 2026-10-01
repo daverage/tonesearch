@@ -13,7 +13,9 @@ import os
 import sys
 import time
 
-from tonesearch import overrides, research
+from pathlib import Path
+
+from tonesearch import knowledge, overrides, research
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 INSTRUCTIONS = """TONE Search finds TONE3000 NAM (Neural Amp Modeler) capture packs for a guitar tone.
@@ -33,11 +35,26 @@ class ToolError(RuntimeError):
     """A tool failed in a way the client's AI should read and act on."""
 
 
+def library_path() -> Path:
+    """The research library; app.py points this at the website's own, so hosted MCP shares it."""
+    folder = Path(os.environ.get("TONESEARCH_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / "knowledge.sqlite3"
+
+
 def web_research(description: str, *, notes=research.web_notes) -> str:
     description = description.strip()
     if not 0 < len(description) <= 500:
         raise ToolError("Describe the tone in 1-500 characters.")
-    return notes(description)
+    entry = knowledge.find(library_path(), description)
+    if entry:
+        label = "reviewed by the site owner" if entry["status"] == "approved" else "not yet reviewed"
+        gear = "; ".join(f"{g.get('kind', '')}: {g.get('name', '')}" for g in entry["gear"])
+        return (f"From TONE Search's research library ({label}).\n{entry['notes']}"
+                + (f"\nGear found earlier: {gear}" if gear else ""))
+    found = notes(description)
+    knowledge.save(library_path(), description, found)
+    return found
 
 
 def search_packs(query: str, gears=None, sizes=None, makes=None, tags=None, creators=None, format: str = "nam",

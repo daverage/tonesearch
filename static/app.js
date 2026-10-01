@@ -218,7 +218,7 @@
     }
     const meta = el("p", "t3ai-meta", `Searched TONE3000 for ${data.queries.map((q) => `"${q}"`).join(", ")}${data.researched ? " after web research" : ""}.${answeredBy(data.ai)}`);
     brief.append(meta);
-    if (data.research_notes) brief.append(researchNotes(data.research_notes));
+    if (data.research_notes) brief.append(researchNotes(data.research_notes, data.library));
     data.warnings.forEach((w) => brief.append(el("p", "t3ai-warning", w)));
     pending.replaceWith(brief);
   }
@@ -230,10 +230,14 @@
   }
 
   // The web notes the AI was given, one "- title: extract (url)" line per source.
-  function researchNotes(notes) {
+  // `library` says whether the notes came from TONE Search's saved research and lets the visitor report them.
+  function researchNotes(notes, library) {
     const lines = notes.split("\n").filter((line) => line.trim());
     const details = el("details", "t3ai-research");
-    details.append(el("summary", null, `Web research notes (${lines.length} source${lines.length === 1 ? "" : "s"})`));
+    const label = library && library.reused
+      ? (library.status === "approved" ? "Saved research, reviewed" : "Saved research")
+      : "Web research notes";
+    details.append(el("summary", null, `${label} (${lines.length} source${lines.length === 1 ? "" : "s"})`));
     const list = el("ul");
     lines.forEach((line) => {
       const item = el("li");
@@ -248,6 +252,26 @@
       list.append(item);
     });
     details.append(list);
+    if (library && library.id) {
+      const report = el("button", "link-btn t3ai-report", "Report wrong research");
+      report.type = "button";
+      report.addEventListener("click", async () => {
+        report.disabled = true;
+        try {
+          const response = await fetch(`api/library/${library.id}/flag`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || `Report failed (${response.status})`);
+          report.replaceWith(el("p", "t3ai-meta", "Thanks. This research won't be reused until it's been checked."));
+          announce("Research reported.");
+        } catch (error) {
+          report.disabled = false;
+          report.after(el("p", "t3ai-warning", error.message));
+        }
+      });
+      details.append(report);
+    }
     return details;
   }
 

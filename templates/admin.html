@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <base href="{{ request.script_root }}/">
+  <title>Research library: TONE Search</title>
+  <link rel="icon" href="static/favicon.ico" sizes="any">
+  <link rel="stylesheet" href="static/style.css?v={{ asset_version }}">
+  <style>
+    .library { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    .library-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+    .library-filters input { flex: 1 1 14rem; }
+    .library input, .library select, .library textarea { font: inherit; padding: 0.4rem 0.5rem; border: 1px solid var(--control-border, #999); border-radius: 6px; background: var(--panel); color: var(--text); }
+    .library textarea { width: 100%; box-sizing: border-box; }
+    .entry { border: 1px solid var(--control-border, #ccc); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; background: var(--panel); }
+    .entry-flagged { border-color: #c0392b; border-width: 2px; }
+    .entry-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; justify-content: space-between; }
+    .entry label { display: block; font-weight: 600; margin: 0.6rem 0 0.2rem; }
+    .entry-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; align-items: center; }
+    .status { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; }
+    .status-flagged { color: #c0392b; }
+    .status-approved { color: #1e8449; }
+    .message { padding: 0.6rem 0.8rem; border-radius: 8px; background: var(--panel); border: 1px solid var(--control-border, #ccc); }
+  </style>
+</head>
+<body>
+  <main class="library">
+    <h1>Research library</h1>
+    <p class="info">Saved web research, reused when a new search's topic strongly matches. Flagged entries aren't used until you review them. Approved entries never expire; unreviewed ones expire after {{ days|int }} days.</p>
+    {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
+
+    <form class="library-filters" method="get" action="admin">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear" aria-label="Search">
+      <select name="status" aria-label="Status">
+        <option value="">All ({{ counts.all }})</option>
+        {% for name in statuses %}<option value="{{ name }}" {% if status == name %}selected{% endif %}>{{ name|capitalize }} ({{ counts[name] }})</option>{% endfor %}
+      </select>
+      <button class="btn btn-secondary btn-small" type="submit">Filter</button>
+    </form>
+
+    {% for entry in entries %}
+    <form class="entry {% if entry.status == 'flagged' %}entry-flagged{% endif %}" method="post" action="admin/entries/{{ entry.id }}" id="entry-{{ entry.id }}">
+      <div class="entry-head">
+        <strong>#{{ entry.id }} · {{ entry.topic }}</strong>
+        <span class="status status-{{ entry.status }}">{{ entry.status }}{% if entry.flags %} · {{ entry.flags }} report{{ 's' if entry.flags != 1 }}{% endif %} · used {{ entry.uses }}×</span>
+      </div>
+      {% if entry.flag_reason %}<p class="t3ai-warning">Reported: {{ entry.flag_reason }}</p>{% endif %}
+      <label for="topic-{{ entry.id }}">Topic</label>
+      <input id="topic-{{ entry.id }}" name="topic" value="{{ entry.topic }}" maxlength="200" style="width:100%;box-sizing:border-box">
+      <label for="gear-{{ entry.id }}">Gear (one per line: kind | name | role)</label>
+      <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }}
+{% endfor %}</textarea>
+      <label for="notes-{{ entry.id }}">Research notes (one source per line: - title: text (url))</label>
+      <textarea id="notes-{{ entry.id }}" name="notes" rows="6">{{ entry.notes }}</textarea>
+      <div class="entry-actions">
+        <label for="status-{{ entry.id }}" style="margin:0">Status</label>
+        <select id="status-{{ entry.id }}" name="status">
+          {% for name in statuses %}<option value="{{ name }}" {% if entry.status == name %}selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}
+        </select>
+        <button class="btn btn-primary btn-small" type="submit" name="action" value="save">Save</button>
+        <button class="btn btn-secondary btn-small" type="submit" name="action" value="approve">Approve</button>
+        <button class="btn btn-secondary btn-small" type="submit" name="action" value="delete" formnovalidate>Delete</button>
+      </div>
+    </form>
+    {% else %}
+    <p>No entries{% if q or status %} match this filter{% endif %}.</p>
+    {% endfor %}
+  </main>
+</body>
+</html>

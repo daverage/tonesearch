@@ -5,16 +5,17 @@ cPanel:     passenger_wsgi.py imports `application` from here (see README.md).
 """
 from __future__ import annotations
 
+import hmac
 import os
 import sqlite3
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import ai, mcp_server, overrides
+from tonesearch import ai, knowledge, mcp_server, overrides
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
                                  tone3000_search, web_notes)
@@ -49,6 +50,7 @@ LIMITS = {
     "lookup": int(os.environ.get("TONESEARCH_LOOKUPS_PER_HOUR", "600")),
     # The hosted MCP endpoint uses the caller's own TONE3000 key; these limits protect this server and the web search.
     "mcp": int(os.environ.get("TONESEARCH_MCP_CALLS_PER_HOUR", "120")),
+    "flag": 20,  # "wrong research" reports
 }
 # MCP web research defaults to the website's search limit, so neither runs out before the other.
 LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", LIMITS["search"]))
@@ -56,8 +58,16 @@ LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", 
 # before then. The AI calls share this budget; ranking is skipped rather than overrunning it.
 REQUEST_BUDGET_SECONDS = float(os.environ.get("TONESEARCH_REQUEST_BUDGET_SECONDS", "85"))
 RANKING_RESERVE_SECONDS = 15  # kept back from the plan call so ranking has a chance to run
+LIBRARY_ADMIN_PASSWORD = os.environ.get("TONESEARCH_ADMIN_PASSWORD", "")  # the research library's review page; off when unset
 LOOKUP_CACHE: dict = {}  # (kind, query) -> (time, suggestions): autocomplete must not spend the 100/minute API limit
 LOOKUP_CACHE_SECONDS = 3600
+
+
+def _library() -> Path:
+    return DATA_DIR / "knowledge.sqlite3"
+
+
+mcp_server.library_path = _library  # the hosted MCP endpoint shares the website's research library
 
 
 def _visitor() -> str:
@@ -197,6 +207,66 @@ def mcp_stream():
             {"Content-Type": "text/plain; charset=utf-8", "Allow": "POST"})
 
 
+# ---- Research library review (owner only) ----------------------------------------------------------------------
+
+def _admin_denied():
+    """None when the request carries the owner's password; otherwise the response to send instead."""
+    if not LIBRARY_ADMIN_PASSWORD:
+        return "Not found", 404  # the review page is off until TONESEARCH_ADMIN_PASSWORD is set
+    auth = request.authorization
+    given = (auth.password or "") if auth else ""
+    if not hmac.compare_digest(given.encode(), LIBRARY_ADMIN_PASSWORD.encode()):
+        return Response("Sign in to review the research library.", 401,
+                        {"WWW-Authenticate": 'Basic realm="TONE Search admin", charset="UTF-8"'})
+    if request.method == "POST":
+        # Browsers resend Basic credentials to any site's form posts, so only accept this site's own forms.
+        source = request.headers.get("Origin") or request.headers.get("Referer") or ""
+        if urlparse(source).netloc != request.host:
+            return "Forbidden", 403
+    return None
+
+
+def _parse_gear(text: str) -> list:
+    gear = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) >= 2 and parts[1]:
+            gear.append({"kind": parts[0][:20] or "other", "name": parts[1][:80], "role": " | ".join(parts[2:])[:240]})
+    return gear
+
+
+@app.get("/admin")
+def admin():
+    if denied := _admin_denied():
+        return denied
+    q, status = request.args.get("q", "")[:100], request.args.get("status", "")
+    every = knowledge.search(_library(), limit=100_000)
+    counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
+    return render_template("admin.html", entries=knowledge.search(_library(), q, status), q=q, status=status,
+                           statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
+                           message=request.args.get("message", "")[:200])
+
+
+@app.post("/admin/entries/<int:entry_id>")
+def admin_entry(entry_id: int):
+    if denied := _admin_denied():
+        return denied
+    form = request.form
+    action = form.get("action", "save")
+    if action == "delete":
+        knowledge.delete(_library(), entry_id)
+        message = f"Deleted entry {entry_id}."
+    else:
+        try:
+            knowledge.update(_library(), entry_id, topic=form.get("topic", ""), notes=form.get("notes", ""),
+                             gear=_parse_gear(form.get("gear", "")),
+                             status="approved" if action == "approve" else form.get("status", "new"))
+            message = f"Saved entry {entry_id}."
+        except ValueError as exc:
+            message = f"Entry {entry_id} not saved: {exc}"
+    return redirect(f"{request.script_root}/admin?{urlencode({'message': message})}", 303)
+
+
 @app.get("/")
 def index():
     local = ai.local_model()
@@ -225,17 +295,30 @@ def api_search():
     deadline = time.monotonic() + REQUEST_BUDGET_SECONDS
     warnings: list = []
     research = ""
+    library = None  # the research library entry this search used or created
+    fresh_research = False
     if use_web and plan is None:
-        try:
-            research = web_notes(prompt.strip())
-        except RuntimeError as exc:
-            warnings.append(f"Web research unavailable: {exc}")
+        library = knowledge.find(_library(), prompt)
+        if library:
+            research = library["notes"]
+        else:
+            try:
+                research = web_notes(prompt.strip())
+                fresh_research = True
+            except RuntimeError as exc:
+                warnings.append(f"Web research unavailable: {exc}")
     try:
         if plan is None:
             plan = ai.plan_tone(prompt, research_notes=research, history=history,
                                 deadline=deadline - RANKING_RESERVE_SECONDS)
     except ai.AiError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
+
+    if fresh_research:
+        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"))
+        library = {"id": entry_id, "status": "new"} if entry_id else None
+    elif library and not library["gear"]:
+        knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
 
     queries = plan["search_queries"] or [prompt.strip()[:80]]
     rank_query = " ".join(queries)
@@ -268,7 +351,23 @@ def api_search():
                 pack["ai_why"] = scores[pack["id"]]["why"]
         packs.sort(key=lambda p: (p.get("ai_fit", -1), p.get("match_score", 0), p.get("downloads_count") or 0), reverse=True)
     return jsonify({"ai": ai.source(), "plan": plan, "queries": queries, "results": packs, "warnings": warnings, "researched": bool(research), "filters": filters, "reused_plan": reuse is not None,
-                    "research_notes": research})
+                    "research_notes": research,
+                    "library": {"id": library["id"], "status": library["status"], "reused": not fresh_research}
+                    if library else None})
+
+
+@app.post("/api/library/<int:entry_id>/flag")
+def api_library_flag(entry_id: int):
+    """A visitor reports wrong research: the entry stops being reused until the owner reviews it."""
+    data = request.get_json(silent=True) or {}
+    reason = data.get("reason", "")
+    if not isinstance(reason, str) or len(reason) > 300:
+        return jsonify({"error": "Keep the reason under 300 characters."}), 400
+    if _over_limit("flag"):
+        return _limited()
+    if not knowledge.flag(_library(), entry_id, reason):
+        return jsonify({"error": "That research is no longer in the library."}), 404
+    return jsonify({"ok": True})
 
 
 @app.get("/api/packs/<int:tone_id>/models")
