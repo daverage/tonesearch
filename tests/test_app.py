@@ -644,3 +644,24 @@ def test_shortlist_keeps_every_search_in_the_running():
     assert len(shortlist) == 12 and queries.count("Bad Cat Hot Cat 100") == 3
     assert queries.count("Mesa Dual Rectifier") == 5 and queries.count("Ibanez Tube Screamer") == 4
     assert shortlist[0]["match_score"] == 90  # still ordered by the chosen sort
+
+
+def test_evidence_skips_questions_and_sales_copy():
+    topic = {"porcupine", "tree", "absentia"}
+    assert research._sentence_score("Does anyone know the gear used on Porcupine Tree's In Absentia album?", topic) == 0
+    assert research._sentence_score("This recipe adapts Porcupine Tree's amp settings to your guitar and pedals.", topic) == 0
+    assert research._sentence_score("Wilson recorded In Absentia with a Mesa Boogie amp and a Strat.", {"absentia"}) > 0
+
+
+def test_web_notes_take_one_page_per_site():
+    pages = [{"href": f"https://tonesite.example/song-{i}", "title": f"Song {i}", "body": ""} for i in range(3)]
+    pages.append({"href": "https://forum.example/thread", "title": "Thread", "body": ""})
+    fetched = []
+
+    def evidence(href, topic):
+        fetched.append(href)
+        return "He recorded it with a Marshall amp and a fuzz pedal through the studio cab."
+
+    notes = research.web_notes("SRV tone", search=lambda *a, **k: pages, evidence=evidence)
+    assert fetched == ["https://tonesite.example/song-0", "https://forum.example/thread"]
+    assert notes.count("\n") == 1

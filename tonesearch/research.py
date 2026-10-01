@@ -188,6 +188,10 @@ def _sentence_score(sentence: str, topic_words: set) -> int:
     words = re.findall(r"[a-z0-9']+", sentence.lower())
     if len(words) < 7 or len(sentence) > 450:
         return 0
+    if sentence.rstrip("\"”)").endswith("?"):
+        return 0  # a question ("Does anyone know the gear...?") is not evidence
+    if {"you", "your", "you're", "yours"} & set(words):
+        return 0  # sales copy aimed at the reader ("adapt it to your rig"), not what the artist used
     if "→" in sentence or "»" in sentence or sentence.count("·") >= 2 or sentence.count("|") >= 2:
         return 0  # "related links" strips: arrows and dot/pipe separators
     capitalised = sum(1 for w in re.findall(r"[A-Za-z][\w']*", sentence) if w[0].isupper())
@@ -314,12 +318,15 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
         outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
     if not any(found for found, _ in outcomes):
         outcomes.append(_search_retrying(search, topic, deadline, TOPIC_ATTEMPTS))  # last try: just the topic words
-    results, seen = [], set()
+    results, seen, hosts = [], set(), set()
     for found, _ in outcomes:
         for result in found:
             href = str(result.get("href", "")).strip()
-            if href and href not in seen and not _skip_source(href):
+            host = (urlparse(href).hostname or "").lower().removeprefix("www.")
+            # One page per site: otherwise one tone-settings site can fill every note.
+            if href and href not in seen and host not in hosts and not _skip_source(href):
                 seen.add(href)
+                hosts.add(host)
                 results.append(result)
     if not results:
         errors = [str(error) for _, error in outcomes if error]
