@@ -36,27 +36,28 @@ def _plan(gear, queries):
         {"choices": [{"message": {"content": content}}]}))
 
 
-def test_gear_gets_a_confidence_level_and_guesses_are_not_searched():
+def test_gear_gets_one_confidence_scale_and_weaker_items_are_not_searched():
     plan = _plan([{"kind": "guitar", "name": "Gretsch White Falcon", "confidence": "recording_confirmed"},
                   {"kind": "amp", "name": "Vox AC30", "confidence": "artist_general"},
                   {"kind": "amp", "name": "Matchless DC-30", "confidence": "speculative"},
                   {"kind": "effect", "name": "Strymon Timeline"}],
                  ["Vox AC30", "Matchless DC-30"])
-    assert [g["confidence"] for g in plan["gear"]] == ["confirmed", "artist", "suggested", "artist"]
-    assert plan["search_queries"] == ["Vox AC30"]  # the confirmed guitar isn't searchable; the guess isn't searched
+    assert [g["confidence"] for g in plan["gear"]] == ["best", "close", "alternative", "close"]
+    assert plan["search_queries"] == ["Vox AC30"]  # the guitar isn't searchable; the weaker amp isn't searched
 
 
-def test_only_guesses_are_still_searched_rather_than_nothing():
-    plan = _plan([{"kind": "amp", "name": "Matchless DC-30", "confidence": "suggested"}], ["Matchless DC-30"])
+def test_only_alternatives_are_still_searched_rather_than_nothing():
+    plan = _plan([{"kind": "amp", "name": "Matchless DC-30", "confidence": "alternative"}], ["Matchless DC-30"])
     assert plan["search_queries"] == ["Matchless DC-30"]
 
 
-def test_ranking_is_told_which_gear_is_confirmed():
-    summary = ai.gear_summary({"summary": "Shimmery clean.", "gear": [
-        {"name": "Vox AC30", "confidence": "confirmed"}, {"name": "Matchless DC-30", "confidence": "suggested"},
-        {"name": "Fender Telecaster"}]})
-    assert "Confirmed for this recording: Vox AC30." in summary and "Suggested substitutes only: Matchless DC-30." in summary
-    assert "era unconfirmed): Fender Telecaster." in summary
+def test_ranking_is_told_the_levels_and_requirements():
+    summary = ai.gear_summary({"summary": "Clean.", "requirements": ["combo", "stereo"], "gear": [
+        {"name": "Roland JC-40", "confidence": "best"}, {"name": "DSM Humboldt", "confidence": "alternative"},
+        {"name": "Fender Deluxe Reverb", "confidence": "artist"}]})  # an older saved plan's level
+    assert "Requirements (score packs of gear that breaks a hard one below 40): combo; stereo." in summary
+    assert "Best match: Roland JC-40." in summary and "Close match: Fender Deluxe Reverb." in summary
+    assert "Alternative: DSM Humboldt." in summary
 
 
 def test_evidence_keeps_the_sentences_that_qualify_a_claim():
@@ -71,46 +72,67 @@ def _auth():
     return {"Authorization": "Basic " + base64.b64encode(b"o:pw").decode(), "Origin": "http://localhost"}
 
 
-def test_admin_gear_lines_take_a_confidence_level(monkeypatch):
+def test_admin_gear_lines_take_a_level_and_read_old_names(monkeypatch):
     monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
     db = app_module._library()
-    old = knowledge.save(db, "Periphery bass", "- a: Nolly used a Darkglass B7K. (https://x)")
+    old = knowledge.save(db, "Periphery bass", "- a: Nolly used a Darkglass B7K. (https://x)",
+                         [{"kind": "effect", "name": "Darkglass B7K", "confidence": "confirmed"}])
+    client = app_module.app.test_client()
+    assert "effect | Darkglass B7K |  | best" in client.get(f"/admin?q=%23{old}", headers=_auth()).get_data(as_text=True)
     form = {"topic": "Periphery bass", "notes": "n", "action": "save", "status": "new",
-            "gear": "effect | Darkglass B7K | drive | confirmed\nguitar | Dingwall NG-2 | the bass\namp | SVT | a | b | suggested"}
-    app_module.app.test_client().post(f"/admin/entries/{old}", data=form, headers=_auth())
+            "gear": "effect | Darkglass B7K | drive | best\nguitar | Dingwall NG-2 | the bass\namp | SVT | a | b | suggested"}
+    client.post(f"/admin/entries/{old}", data=form, headers=_auth())
     gear = knowledge.get(db, old)["gear"]
     assert [(g["name"], g["role"], g["confidence"]) for g in gear] == [
-        ("Darkglass B7K", "drive", "confirmed"), ("Dingwall NG-2", "the bass", "artist"), ("SVT", "a | b", "suggested")]
+        ("Darkglass B7K", "drive", "best"), ("Dingwall NG-2", "the bass", "close"), ("SVT", "a | b", "alternative")]
 
 
-def test_mcp_save_gear_and_saved_answers_carry_confidence():
+def test_mcp_save_gear_and_saved_answers_carry_levels():
     notes = "- Rundown: Nolly runs a Darkglass B7K preamp and an Origin Effects Cali76. (https://x.example)"
     mcp_server.web_research("Periphery bass", notes=lambda text: notes)
-    mcp_server.save_gear("Periphery bass", [{"kind": "effect", "name": "Darkglass B7K", "confidence": "confirmed"},
+    mcp_server.save_gear("Periphery bass", [{"kind": "effect", "name": "Darkglass B7K", "confidence": "best"},
                                             {"kind": "effect", "name": "Origin Effects Cali76"}])
     gear = knowledge.find(app_module._library(), "Periphery bass")["gear"]
-    assert [g["confidence"] for g in gear] == ["confirmed", "artist"]
+    assert [g["confidence"] for g in gear] == ["best", "close"]
     again = mcp_server.web_research("Periphery bass", notes=lambda text: pytest.fail("reuse the library"))
-    assert "Darkglass B7K (confirmed)" in again and "Cali76 (artist)" in again
+    assert "Darkglass B7K (best)" in again and "Cali76 (close)" in again and "best = documented" in again
 
 
-def test_requirement_requests_keep_candidates_that_fit_and_label_them():
-    content = json.dumps({"summary": "A clean stereo combo for gigs.", "advice": [], "intent": "product_recommendation",
-                          "requirements": ["combo with speakers", "stereo", "clean headroom for pedals"],
-                          "search_queries": ["Roland JC-40", "Fender Deluxe Reverb"],
-                          "gear": [{"kind": "amp", "name": "Roland JC-40", "confidence": "confirmed"},
-                                   {"kind": "amp", "name": "Fender Deluxe Reverb", "role": "mono", "confidence": "artist"},
-                                   {"kind": "other", "name": "DSM Humboldt Simplifier MKII", "confidence": "suggested"},
-                                   {"kind": "effect", "name": "Ibanez Tube Screamer", "confidence": "artist"},
-                                   {"kind": "cab", "name": "Celestion A-Type", "confidence": "artist"}]})
-    plan = ai.plan_tone("stereo amp cab combo for gigging, a good pedal platform", opener=lambda req, timeout: _Response(
-        {"choices": [{"message": {"content": content}}]}))
-    assert plan["intent"] == "requirements" and plan["requirements"][1] == "stereo"
+def _recommend(prompt, body):
+    return ai.plan_tone(prompt, opener=lambda req, timeout: _Response({"choices": [{"message": {"content": json.dumps(body)}}]}))
+
+
+def test_requests_with_requirements_keep_only_the_gear_asked_for():
+    plan = _recommend("stereo amp cab combo for gigging, a good pedal platform", {
+        "summary": "A clean stereo combo for gigs.", "advice": [],
+        "requirements": ["combo with speakers", "stereo", "clean headroom for pedals"],
+        "search_queries": ["Roland JC-40", "Fender Deluxe Reverb"],
+        "aliases": ["blackface deluxe reverb", "british invasion", "beatles"],
+        "gear": [{"kind": "amp", "name": "Roland JC-40", "confidence": "best"},
+                 {"kind": "amp", "name": "Fender Deluxe Reverb", "role": "mono", "confidence": "close"},
+                 {"kind": "other", "name": "DSM Humboldt Simplifier MKII", "confidence": "alternative"},
+                 {"kind": "effect", "name": "Ibanez Tube Screamer", "confidence": "close"},
+                 {"kind": "cab", "name": "Celestion A-Type", "confidence": "close"}]})
+    assert plan["requirements"][1] == "stereo" and plan["aliases"] == []  # no names in the request
     assert [g["name"] for g in plan["gear"]] == ["Roland JC-40", "Fender Deluxe Reverb", "DSM Humboldt Simplifier MKII"]
-    assert plan["search_queries"] == ["Roland JC-40"]  # meets every requirement, so it's what gets searched
-    summary = ai.gear_summary(plan)
-    assert "Requirements (score packs of gear that breaks a hard one below 40): combo with speakers" in summary
-    assert "Meets every requirement: Roland JC-40." in summary and "Partial match" in summary
+    assert plan["search_queries"] == ["Roland JC-40"]
+
+
+def test_artist_requests_keep_their_pedals_and_aliases():
+    plan = _recommend("Gilmour Comfortably Numb solo", {
+        "summary": "s", "advice": [], "requirements": [], "search_queries": ["Hiwatt DR103"],
+        "aliases": ["David Gilmour", "Pink Floyd", "The Wall"],
+        "gear": [{"kind": "amp", "name": "Hiwatt DR103", "confidence": "best"},
+                 {"kind": "effect", "name": "Electro-Harmonix Big Muff", "confidence": "best"}]})
+    assert [g["name"] for g in plan["gear"]] == ["Hiwatt DR103", "Electro-Harmonix Big Muff"]
+    assert plan["aliases"] == ["David Gilmour", "Pink Floyd", "The Wall"]
+
+
+def test_a_described_sound_keeps_its_pedals_but_gets_no_aliases():
+    plan = _recommend("chimey jangly clean with a fuzz edge", {
+        "summary": "s", "advice": [], "search_queries": ["Vox AC30"], "aliases": ["Beatles"],
+        "gear": [{"kind": "amp", "name": "Vox AC30"}, {"kind": "effect", "name": "Vox Tone Bender"}]})
+    assert [g["name"] for g in plan["gear"]] == ["Vox AC30", "Vox Tone Bender"] and plan["aliases"] == []
 
 
 def test_requirement_requests_research_specs_not_rigs(monkeypatch):
@@ -126,42 +148,3 @@ def test_requirement_requests_research_specs_not_rigs(monkeypatch):
     assert asked and all("bassist" in q for q in asked if q != "Periphery bass")  # the last try is the bare topic
 
 
-@pytest.mark.parametrize("intent, aliases, expected", [
-    (None, [], "requirements"),          # not given: "needs" words decide
-    ("artist", [], "requirements"),      # a small model's default, with no artist named
-    ("artist", ["SRV"], "artist"),       # a named artist with needs words stays an artist request
-    ("requirements", [], "requirements"),
-])
-def test_intent_is_checked_against_the_request(intent, aliases, expected):
-    body = {"summary": "s", "advice": [], "search_queries": ["Fender Blues Deluxe"], "aliases": aliases,
-            "gear": [{"kind": "amp", "name": "Fender Blues Deluxe Reissue"}]}
-    if intent:
-        body["intent"] = intent
-    plan = ai.plan_tone("amp cab combo good pedal platform gigging", opener=lambda req, timeout: _Response(
-        {"choices": [{"message": {"content": json.dumps(body)}}]}))
-    assert plan["intent"] == expected
-    assert plan["gear"][0]["confidence"] == "artist"  # unlabelled: a partial match for requirements
-
-
-def test_a_described_sound_without_needs_or_names_is_a_sound_request():
-    body = {"summary": "s", "advice": [], "search_queries": ["Vox AC30"], "gear": []}
-    plan = ai.plan_tone("chimey jangly clean", opener=lambda req, timeout: _Response(
-        {"choices": [{"message": {"content": json.dumps(body)}}]}))
-    assert plan["intent"] == "sound"
-
-
-def test_requirement_research_gets_no_aliases_and_explains_its_levels(monkeypatch):
-    body = {"summary": "Clean pedal platform.", "advice": [], "search_queries": ["Fender Deluxe Reverb"],
-            "aliases": ["blackface deluxe reverb", "british invasion", "beatles"],
-            "gear": [{"kind": "amp", "name": "Fender Deluxe Reverb"}, {"kind": "cab", "name": "Fender 4x10"}]}
-    plan = ai.plan_tone("clean pedal platform amp cab gigging", opener=lambda req, timeout: _Response(
-        {"choices": [{"message": {"content": json.dumps(body)}}]}))
-    assert plan["intent"] == "requirements" and plan["aliases"] == []
-    assert [g["name"] for g in plan["gear"]] == ["Fender Deluxe Reverb"]  # "amp cab" didn't ask for a cab
-    db = app_module._library()
-    entry_id = knowledge.save(db, "clean pedal platform amp cab gigging", "- a: notes. (https://x)", plan["gear"],
-                              plan["aliases"], plan["intent"])
-    assert knowledge.find(db, "Beatles British Invasion") is None
-    monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
-    page = app_module.app.test_client().get(f"/admin?q=%23{entry_id}", headers=_auth()).get_data(as_text=True)
-    assert "Gear recommendation research" in page and "<strong>artist</strong> = partial match" in page

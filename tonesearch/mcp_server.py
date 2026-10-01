@@ -72,9 +72,7 @@ def _saved_answer(description: str) -> str:
         lines.append("Requirements: " + "; ".join(plan["requirements"]))
     gear = "; ".join(_gear_line(g) for g in plan.get("gear") or [])
     if gear:
-        legend = ai.CONFIDENCE_LABELS.get(plan.get("intent"), ai.CONFIDENCE_LABELS["artist"])
-        lines.append(f"Gear (confidence: " + " / ".join(f"{level} = {legend[level].lower()}" for level in ai.CONFIDENCE)
-                     + f"): {gear}")
+        lines.append(f"Gear ({LEVELS}): {gear}")
     if answer.get("queries"):
         lines.append("Catalogue searches used: " + ", ".join(answer["queries"]))
     lines.append("Ranked packs:")
@@ -103,10 +101,8 @@ def web_research(description: str, *, notes=research.web_notes) -> str:
         cache.count(library_path(), "mcp_research_library")
         label = "reviewed by the site owner" if entry["status"] == "approved" else "not yet reviewed"
         gear = "; ".join(_gear_line(g) for g in entry["gear"])
-        legend = ai.CONFIDENCE_LABELS.get(entry.get("intent") or "artist", ai.CONFIDENCE_LABELS["artist"])
-        meaning = " / ".join(f"{level} = {legend[level].lower()}" for level in ai.CONFIDENCE)
         return (f"From TONE Search's research library ({label}).\n{entry['notes']}"
-                + (f"\nGear found earlier ({meaning}): {gear}" if gear else ""))
+                + (f"\nGear found earlier ({LEVELS}): {gear}" if gear else ""))
     cache.count(library_path(), "mcp_research_web")
     found = notes(description)
     knowledge.save(library_path(), description, found)
@@ -150,9 +146,11 @@ def download_link(pack_id: int) -> str:
 
 
 GEAR_KINDS = ("amp", "effect", "guitar", "pickup", "cab", "other")
+LEVELS = ("best = documented for this recording or era, or meets every requirement; close = the artist's gear from "
+          "another era, or misses one requirement; alternative = a substitute, modern equivalent or guess")
 
 
-def save_gear(description: str, gear: list, aliases: list | None = None, intent: str = "artist") -> str:
+def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
     """Store the gear the assistant worked out from web_research, as the website's AI does for its searches.
 
     Only fills an empty gear list: never replaces gear the owner edited or the website's AI wrote."""
@@ -173,8 +171,7 @@ def save_gear(description: str, gear: list, aliases: list | None = None, intent:
     entry = knowledge.find(library_path(), description, count_use=False)
     if not entry:
         return "There's no saved research for this tone yet: call web_research first."
-    intent = intent if intent in ai.INTENTS else "artist"
-    if aliases and not entry.get("aliases") and intent == "artist":  # other names only make sense for an artist
+    if aliases and not entry.get("aliases"):
         knowledge.add_aliases(library_path(), entry["id"], [str(a)[:60] for a in aliases[:8]])
     if entry["gear"]:
         return "This research already has a gear list, so it was left as it is."
@@ -185,7 +182,7 @@ def save_gear(description: str, gear: list, aliases: list | None = None, intent:
     if not supported:
         return ("Nothing saved: none of these appear in the research notes. Only save gear the notes name. "
                 "If the research is poor, call rate_result with rating 'bad' instead.")
-    knowledge.add_gear(library_path(), entry["id"], supported, intent)
+    knowledge.add_gear(library_path(), entry["id"], supported)
     return (f"Saved {len(supported)} gear item{'s' if len(supported) != 1 else ''} with the research."
             + (f" Not saved, because the notes don't name them: {', '.join(skipped)}." if skipped else ""))
 
@@ -266,17 +263,11 @@ TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research not
         "kind": {"type": "string", "enum": list(GEAR_KINDS)},
         "name": {"type": "string", "description": "Make and model, e.g. 'Darkglass Microtubes B7K'"},
         "role": {"type": "string", "description": "What it does in this tone"},
-        "confidence": {"type": "string", "enum": list(ai.CONFIDENCE),
-                       "description": "confirmed: the notes document it for this recording or era; artist: documented "
-                                      "for this player, other or unknown era; suggested: a modern equivalent or guess"},
+        "confidence": {"type": "string", "enum": list(ai.CONFIDENCE), "description": LEVELS},
     }, "required": ["kind", "name", "confidence"]}},
-    "intent": {"type": "string", "enum": list(ai.INTENTS), "default": "artist",
-               "description": "artist: an artist, band, song or album; requirements: gear meeting stated needs; "
-                              "sound: a described sound with no artist. For requirements, confidence means confirmed "
-                              "= meets every requirement, artist = partial match, suggested = alternative approach."},
     "aliases": {"type": "array", "maxItems": 8, "items": {"type": "string"},
-                "description": "Other names for the same rig: the player and nickname, band, song, album, era "
-                               "(e.g. 'Nolly', 'Adam Getgood'). Names only, no sound descriptions."},
+                "description": "Only when the request names an artist, band, song or album: other names for the "
+                               "same rig (e.g. 'Nolly', 'Adam Getgood'). Names only, no sound descriptions or gear."},
 }, ["description", "gear"])
 TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
                                     "the research and brief (leave pack_id out) or one pack. It improves future "

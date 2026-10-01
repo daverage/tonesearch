@@ -118,11 +118,9 @@
       <input id="topic-{{ entry.id }}" name="topic" value="{{ entry.topic }}" maxlength="200" style="width:100%;box-sizing:border-box">
       <label for="aliases-{{ entry.id }}">Also known as (comma-separated names that find this research: player, band, song, album, era)</label>
       <input id="aliases-{{ entry.id }}" name="aliases" value="{{ entry.aliases }}" maxlength="600" style="width:100%;box-sizing:border-box">
-      {% set labels = level_labels.get(entry.intent or "artist", level_labels["artist"]) %}
-      <label for="gear-{{ entry.id }}">Gear (one per line: kind | name | role | confidence)</label>
-      <p class="info" style="margin:0.1rem 0 0.3rem">{{ {"requirements": "Gear recommendation", "sound": "Described sound"}.get(entry.intent, "Artist or song") }} research, so the levels mean:
-        <strong>confirmed</strong> = {{ labels.confirmed|lower }}; <strong>artist</strong> = {{ labels.artist|lower }}; <strong>suggested</strong> = {{ labels.suggested|lower }}.</p>
-      <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }} | {{ g.confidence or "artist" }}
+      <label for="gear-{{ entry.id }}">Gear (one per line: kind | name | role | best, close or alternative)</label>
+      <p class="info" style="margin:0.1rem 0 0.3rem"><strong>best</strong> = documented for this recording or era, or meets every requirement; <strong>close</strong> = the artist's gear from another era, or misses one requirement; <strong>alternative</strong> = a substitute, modern equivalent or guess.</p>
+      <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }} | {{ confidence_of(g.confidence) }}
 {% endfor %}</textarea>
       <label for="notes-{{ entry.id }}">Research notes (one source per line: - title: text (url))</label>
       <textarea id="notes-{{ entry.id }}" name="notes" rows="6">{{ entry.notes }}</textarea>

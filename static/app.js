@@ -19,14 +19,11 @@
   const state = { history: [], goal: "", busy: false, plan: null, searchedFilters: null, log: [], packChats: new Map() };
   const GEAR_LABELS = { amp: "Amp head", "amp-cab": "Full rig", amp_cab: "Full rig", "full-rig": "Full rig", pedal: "Pedal", outboard: "Outboard", ir: "IR" };
   // How sure the research is that the gear made this tone; unlabelled (older) gear counts as the artist's.
-  // Labels depend on what was asked: an artist's tone, gear that meets stated needs, or a described sound.
-  const CONFIDENCE_LABELS = {
-    artist: { confirmed: "(confirmed)", artist: "(artist's gear, era unconfirmed)", suggested: "(suggestion)" },
-    requirements: { confirmed: "(meets every requirement)", artist: "(partial match)", suggested: "(alternative approach)" },
-    sound: { confirmed: "(fits the sound)", artist: "(likely fits)", suggested: "(suggestion)" },
-  };
-  const confidence = (g) => (["confirmed", "artist", "suggested"].includes(g.confidence) ? g.confidence : "artist");
-  const confidenceLabel = (plan, g) => (CONFIDENCE_LABELS[plan.intent] || CONFIDENCE_LABELS.artist)[confidence(g)];
+  // How well each item answers the request; older saved answers use confirmed / artist / suggested.
+  const CONFIDENCE_LABELS = { best: "(best match)", close: "(close match)", alternative: "(alternative)" };
+  const OLD_LEVELS = { confirmed: "best", artist: "close", suggested: "alternative" };
+  const confidence = (g) => OLD_LEVELS[g.confidence] || (g.confidence in CONFIDENCE_LABELS ? g.confidence : "close");
+  const confidenceLabel = (plan, g) => CONFIDENCE_LABELS[confidence(g)];
   const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", other: "Other" };
 
   const el = (tag, className, text) => {

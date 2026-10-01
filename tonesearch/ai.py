@@ -22,7 +22,7 @@ from urllib.request import Request, build_opener, urlopen
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tonesearch import overrides
-from tonesearch.research import _NEEDS, _is_safe_public_host, _NoRedirectHandler
+from tonesearch.research import _is_safe_public_host, _NoRedirectHandler
 
 MAX_RESPONSE_BYTES = 1_000_000
 
@@ -390,7 +390,6 @@ def _normalise(model, value: object) -> object:
         return {**value, "summary": summary if isinstance(summary, str) else "", "gear": gear[:12],
                 "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6),
                 "aliases": _text_list(value.get("aliases"), 16),
-                "intent": _INTENT_SYNONYMS.get(str(value.get("intent") or "").strip().lower(), ""),  # "" = not given
                 "requirements": _text_list(value.get("requirements") or value.get("constraints") or value.get("needs"), 12)}
     if model is _PackAnswer:
         value = _unwrap(value, {"reply"})
@@ -634,7 +633,7 @@ class _Gear(_Model):
     kind: str = "other"
     name: str = Field(min_length=1, max_length=80)
     role: str = Field(default="", max_length=240)
-    confidence: str = "artist"
+    confidence: str = "close"
 
 
 class _Plan(_Model):
@@ -643,7 +642,6 @@ class _Plan(_Model):
     gear: List[_Gear] = Field(default_factory=list, max_length=12)
     search_queries: List[str] = Field(default_factory=list, max_length=6)
     aliases: List[str] = Field(default_factory=list, max_length=16)
-    intent: str = "artist"
     requirements: List[str] = Field(default_factory=list, max_length=12)
 
 
@@ -663,34 +661,25 @@ class _PackAnswer(_Model):
 
 
 _GEAR_KINDS = {"amp", "effect", "guitar", "pickup", "cab", "other"}
-# How sure the research is that this gear made this tone. Unlabelled gear (older saved plans and library entries)
-# counts as "artist": documented for the player, but not shown to be on this recording.
-CONFIDENCE = ("confirmed", "artist", "suggested")
+# How well this gear answers the request, one scale for every kind of request:
+# best = documented for this recording or era, or meets every stated requirement;
+# close = the artist's gear from another or unknown era, or misses one requirement;
+# alternative = a substitute, modern equivalent, replica, different approach or guess.
+# Unlabelled gear, and the older names (confirmed, artist, suggested), map onto it.
+CONFIDENCE = ("best", "close", "alternative")
+CONFIDENCE_LABELS = {"best": "Best match", "close": "Close match", "alternative": "Alternative"}
 _CONFIDENCE_SYNONYMS = {
-    "confirmed": "confirmed", "recording_confirmed": "confirmed", "documented": "confirmed", "high": "confirmed",
-    "certain": "confirmed", "verified": "confirmed", "live_era_confirmed": "confirmed", "era": "confirmed",
-    "artist": "artist", "artist_general": "artist", "artist_era_confirmed": "artist", "medium": "artist",
-    "likely": "artist", "probable": "artist", "other era": "artist",
-    "suggested": "suggested", "speculative": "suggested", "low": "suggested", "guess": "suggested",
-    "modern_equivalent": "suggested", "genre_typical": "suggested", "possible": "suggested", "unconfirmed": "suggested",
-}
-
-
-# What a request is: an artist's (or song's) tone, gear that must meet stated needs, or a described sound.
-INTENTS = ("artist", "requirements", "sound")
-_INTENT_SYNONYMS = {"artist": "artist", "artist_tone": "artist", "song": "artist", "album": "artist",
-                    "requirements": "requirements", "requirement": "requirements", "product_recommendation": "requirements",
-                    "recommendation": "requirements", "product": "requirements", "sound": "sound", "description": "sound",
-                    "described_sound": "sound", "tone": "sound"}
-# What each confidence level means to the player, by intent.
-CONFIDENCE_LABELS = {
-    "artist": {"confirmed": "Confirmed for this recording", "artist": "The artist's documented gear (era unconfirmed)",
-               "suggested": "Suggested substitutes only"},
-    "requirements": {"confirmed": "Meets every requirement", "artist": "Partial match (misses a requirement)",
-                     "suggested": "Alternative approach"},
-    "sound": {"confirmed": "Fits the described sound", "artist": "Likely fits", "suggested": "Suggestion"},
+    "best": "best", "confirmed": "best", "recording_confirmed": "best", "documented": "best", "high": "best",
+    "certain": "best", "verified": "best", "live_era_confirmed": "best", "requirement_match": "best",
+    "confirmed_spec": "best", "meets": "best",
+    "close": "close", "artist": "close", "artist_general": "close", "artist_era_confirmed": "close", "medium": "close",
+    "likely": "close", "probable": "close", "partial": "close", "partial_match": "close",
+    "alternative": "alternative", "suggested": "alternative", "speculative": "alternative", "low": "alternative",
+    "guess": "alternative", "modern_equivalent": "alternative", "genre_typical": "alternative",
+    "possible": "alternative", "unconfirmed": "alternative", "alternative_architecture": "alternative",
 }
 # "Pedal platform" is a kind of amp, not a request for pedals.
+_COMMON_WORDS = {"the", "and", "of", "a", "an", "in", "on", "tone", "sound", "guitar", "bass", "amp", "rig"}
 _ASKS_FOR = {"effect": re.compile(r"\b(pedals?|stomp ?box|overdrive|fuzz|delay|reverb|chorus|compressor)\b(?! platform)", re.I),
              # "an amp cab combo" is one box: only a cab or speaker on its own is a request for one.
              "cab": re.compile(r"(?<!amp )\b(cab|cabinet|speakers?|ir|impulse)\b(?!\s+combo)", re.I),
@@ -698,8 +687,8 @@ _ASKS_FOR = {"effect": re.compile(r"\b(pedals?|stomp ?box|overdrive|fuzz|delay|r
 
 
 def confidence_of(value) -> str:
-    """A gear item's confidence level, "artist" when it's missing or unrecognised."""
-    return _CONFIDENCE_SYNONYMS.get(str(value or "").strip().lower(), "artist")
+    """A gear item's confidence level, "close" when it's missing or unrecognised."""
+    return _CONFIDENCE_SYNONYMS.get(str(value or "").strip().lower(), "close")
 
 _STYLE = (
     "You are an experienced guitar and bass tone advisor for players who use Neural Amp Modeler (NAM) "
@@ -719,10 +708,9 @@ _PLAN_SCHEMA = {
             "confidence": {"type": "string", "enum": list(CONFIDENCE)}}, "required": ["kind", "name", "confidence"]}},
         "search_queries": {"type": "array", "items": {"type": "string"}},
         "aliases": {"type": "array", "items": {"type": "string"}},
-        "intent": {"type": "string", "enum": list(INTENTS)},
         "requirements": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["summary", "advice", "gear", "search_queries", "intent"],
+    "required": ["summary", "advice", "gear", "search_queries"],
 }
 _RANK_SCHEMA = {
     "type": "object",
@@ -821,22 +809,18 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "If the request is about a BASS tone, describe the bass sound and list only the bassist's gear (bass amps, "
         "bass preamps, DIs and pedals such as a Darkglass or SansAmp, the bass itself): never the band's guitar rig. "
         "A bass sound described as distorted highs over clean lows usually means a split or parallel chain: say so.\n"
-        "- intent: 'artist' when the request names an artist, band, song or album; 'requirements' when it asks for "
-        "gear that meets needs (e.g. 'a stereo combo for gigging that takes pedals well'); 'sound' for a described "
-        "sound with no artist.\n"
-        "- requirements: for intent 'requirements' only, the explicit and implied needs, hard ones first (e.g. "
-        "'combo with built-in speakers', 'stereo', 'loud enough to gig', 'clean headroom for pedals'); else [].\n"
-        "  For intent 'requirements', gear is the candidate products: check each against every requirement and leave "
-        "out any that breaks a hard one (a head when a combo was asked for, mono when stereo is required). Confidence "
-        "then means 'confirmed' = meets every requirement (ideally per the maker's specs), 'artist' = a partial match "
-        "(say in its role which requirement it misses), 'suggested' = a different approach (e.g. an amp simulator "
-        "instead of a combo). A 'best amps' list is not evidence that a product meets a requirement. Don't list pedals, "
-        "speakers or guitars unless the request asks for them.\n"
+        "- requirements: if the request states needs rather than (or as well as) a sound, list the explicit and "
+        "implied ones, hard ones first (e.g. 'combo with built-in speakers', 'stereo', 'loud enough to gig', 'clean "
+        "headroom for pedals'); else []. Then gear is the candidate products: check each against every requirement "
+        "and leave out any that breaks a hard one (a head when a combo was asked for, mono when stereo is required). "
+        "A 'best amps' list is not evidence that a product meets a requirement; a maker's specs are. Don't list "
+        "pedals, speakers or guitars unless the request asks for them.\n"
         "- gear: the specific products that define this tone, each with kind, name, a short role and confidence:\n"
-        "  confidence 'confirmed' = a source documents it for this recording, album or era; 'artist' = documented for "
-        "this player but in another era or with no era given (including a site's whole-career gear list); "
-        "'suggested' = a modern equivalent, a replica, typical of the genre, or your inference. Never call gear "
-        "'confirmed' because it is famous, and never turn a site's 'modern equivalent' into the original.\n"
+        "  'best' = a source documents it for this recording, album or era, or it meets every requirement; 'close' = "
+        "the player's gear from another era or with no era given (including a site's whole-career gear list), or it "
+        "misses one requirement (say which in its role); 'alternative' = a modern equivalent, a replica, typical of "
+        "the genre, a different approach (an amp simulator instead of a combo) or your inference. Never call gear "
+        "'best' because it is famous, and never turn a site's 'modern equivalent' into the original.\n"
         "  Name only as much as the source supports: 'Vox AC30', not an AC30 variant the source doesn't name. Don't "
         "name a pedal model just because the tone has that effect: put 'dotted-eighth delay' or 'compressor' in advice, "
         "not gear. Use real "
@@ -853,7 +837,8 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "one; if it is uncertain, still name the researched one and say so in its role. Ignore gear that a tone-settings "
         "site recommends for recreating the sound today (modelling or practice amps such as a Fender Mustang, Boss "
         "Katana or Positive Grid Spark) unless the player asks for budget or modern gear.\n"
-        "- aliases: up to 8 other names someone might use to ask for this same rig: the player's name and nickname, "
+        "- aliases: ONLY if the request names an artist, band, song or album: up to 8 other names someone might use "
+        "to ask for this same rig: the player's name and nickname, "
         "the band, the song, the album, the era or year (e.g. for 'Periphery bass': 'Nolly', 'Adam Getgood', "
         "'Periphery'). Only names that research or well-known facts support; no sound descriptions, no gear.\n"
         "- search_queries: 1-3 SHORT TONE3000 catalogue searches for the kind of capture the player wants. Usually that "
@@ -876,21 +861,24 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         plan.search_queries = [q for q in plan.search_queries if not _PRACTICE_AMPS.search(q)]
     for gear in plan.gear:
         gear.confidence = confidence_of(gear.confidence)
-    intent = _intent(plan, prompt)
-    if intent == "requirements":  # keep to the kinds of gear the request asks for: amps (and amp sims) always
+    # Aliases only count when one shares a word with the request: for "clean pedal platform amp cab gigging" a
+    # model listed "beatles" and "british invasion", which would hand this research to a Beatles search.
+    asked = set(re.findall(r"[a-z0-9]+", prompt.lower()))
+    names_given = any(set(re.findall(r"[a-z0-9]+", a.lower())) & asked - _COMMON_WORDS for a in plan.aliases)
+    if plan.requirements and not names_given:  # gear for a set of needs: keep to the kinds the request asks for
         plan.gear = [g for g in plan.gear if g.kind in ("amp", "other") or
                      (g.kind in _ASKS_FOR and _ASKS_FOR[g.kind].search(prompt)) or
                      (g.kind == "pickup" and _ASKS_FOR["guitar"].search(prompt))]
     # Search for what the research supports best: for each kind of gear, skip searches for items with a lower
     # confidence than the best of that kind (a partial-match amp when one meets every need), and skip guesses
     # whenever anything better is known.
-    trusted = [g for g in plan.gear if g.confidence == "confirmed"] or [g for g in plan.gear if g.confidence == "artist"]
-    rank = {"confirmed": 0, "artist": 1, "suggested": 2}
+    trusted = [g for g in plan.gear if g.confidence == "best"] or [g for g in plan.gear if g.confidence == "close"]
+    rank = {"best": 0, "close": 1, "alternative": 2}
     best_of_kind = {}
     for g in plan.gear:
         best_of_kind[g.kind] = min(best_of_kind.get(g.kind, 2), rank[g.confidence])
     weaker = {g.name.lower() for g in plan.gear if rank[g.confidence] > best_of_kind[g.kind]
-              or (trusted and g.confidence == "suggested")}
+              or (trusted and g.confidence == "alternative")}
     plan.search_queries = [q for q in plan.search_queries if not _names_guess(q, weaker)]
     queries = list(dict.fromkeys(q.strip()[:80] for q in plan.search_queries if q and q.strip()))
     if not _WANTS_GUITAR.search(prompt):
@@ -906,37 +894,22 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "advice": [tip.strip() for tip in plan.advice if tip.strip()][:6],
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
         "search_queries": queries[:3],
-        # Aliases are other names for an artist's rig; for a gear recommendation they'd be product names and eras
-        # ("beatles", "british invasion") that would hand this research to someone asking for the Beatles' rig.
-        "aliases": [a.strip()[:60] for a in plan.aliases if a.strip()][:8] if intent == "artist" else [],
-        "intent": intent,
-        "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8] if intent == "requirements" else [],
+        "aliases": [a.strip()[:60] for a in plan.aliases if a.strip()][:8] if names_given else [],
+        "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8],
     }
 
 
-def _intent(plan, prompt: str) -> str:
-    """The plan's intent, checked: small models skip it or default to "artist". A request with two or more "needs"
-    words ("combo", "gigging", "pedal platform") and no names for an artist, band or song is a requirements one."""
-    needs = len(_NEEDS.findall(prompt)) >= 2
-    if plan.intent not in INTENTS:
-        return "requirements" if needs else ("artist" if plan.aliases else "sound")
-    if plan.intent == "artist" and needs and not plan.aliases:
-        return "requirements"
-    return plan.intent
-
-
 def _names_guess(query: str, guesses: set) -> bool:
-    """True when a search is for a 'suggested' item: its words are all part of that item's name."""
+    """True when a search is for one of these items: its words are all part of that item's name."""
     words = set(query.lower().split())
     return any(words and words <= set(name.split()) for name in guesses)
 
 
 def gear_summary(plan: dict) -> str:
-    """The plan's summary plus its gear by confidence, so ranking favours captures of confirmed gear."""
+    """The plan's summary plus its gear by confidence, so ranking favours captures of the best matches."""
     groups = {level: [g["name"] for g in plan.get("gear") or [] if confidence_of(g.get("confidence")) == level]
               for level in CONFIDENCE}
-    labels = CONFIDENCE_LABELS.get(plan.get("intent"), CONFIDENCE_LABELS["artist"])
-    lines = [f"{labels[level]}: {', '.join(names)}." for level, names in groups.items() if names]
+    lines = [f"{CONFIDENCE_LABELS[level]}: {', '.join(names)}." for level, names in groups.items() if names]
     if plan.get("requirements"):
         lines.insert(0, "Requirements (score packs of gear that breaks a hard one below 40): "
                         + "; ".join(plan["requirements"]) + ".")
@@ -954,8 +927,7 @@ def rank_packs(prompt: str, summary: str, packs: list, *, opener=urlopen, deadli
         + "\n".join(lines)
         + "\n\nScore EVERY candidate with fit 0-100 using this scale, and give why in one short sentence that names "
         "the deciding detail:\n"
-        "Prefer captures of gear confirmed for this recording, then the artist's documented gear; suggested "
-        "substitutes are only stand-ins.\n"
+        "Prefer captures of the best-match gear, then close matches; alternatives are only stand-ins.\n"
         "- 90-100: the same product (or the exact rig) the request calls for.\n"
         "- 70-89: the same model family, or a very close substitute that will get the player there.\n"
         "- 40-69: a plausible alternative that needs tweaking.\n"

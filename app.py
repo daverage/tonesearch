@@ -30,6 +30,7 @@ application = app
 # Changes whenever a static file is redeployed, so Cloudflare's cache never serves stale JS/CSS.
 ASSET_VERSION = str(int(max(f.stat().st_mtime for f in (ROOT / "static").iterdir())))
 app.jinja_env.globals["asset_version"] = ASSET_VERSION
+app.jinja_env.globals["confidence_of"] = ai.confidence_of  # older entries say confirmed/artist/suggested
 app.jinja_env.filters["datetime"] = lambda at: time.strftime("%d %b %Y %H:%M", time.gmtime(at)) + " UTC"
 
 
@@ -253,14 +254,14 @@ ACTIVITY_EVENTS = (
 
 
 def _parse_gear(text: str) -> list:
-    """Admin gear lines, "kind | name | role | confidence"; a line without a confidence level counts as "artist"."""
+    """Admin gear lines, "kind | name | role | confidence"; a line without a confidence level counts as "close"."""
     gear = []
     for line in text.splitlines():
         parts = [part.strip() for part in line.split("|")]
         if len(parts) >= 2 and parts[1]:
-            level = "artist"
-            if len(parts) >= 4 and parts[-1].lower() in ai.CONFIDENCE:
-                level = parts.pop().lower()
+            level = "close"
+            if len(parts) >= 4 and parts[-1].lower() in ai._CONFIDENCE_SYNONYMS:
+                level = ai.confidence_of(parts.pop())
             gear.append({"kind": parts[0][:20] or "other", "name": parts[1][:80], "role": " | ".join(parts[2:])[:240],
                          "confidence": level})
     return gear
@@ -283,7 +284,6 @@ def admin():
     counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
     return render_template("admin.html", view="library", entries=knowledge.search(_library(), q, status), q=q, status=status,
                            statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
-                           level_labels=ai.CONFIDENCE_LABELS,
                            message=request.args.get("message", "")[:200])
 
 
@@ -391,12 +391,12 @@ def api_search():
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
-        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"), plan.get("intent", ""))
+        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"))
         library = knowledge.get(_library(), entry_id) if entry_id else None  # a reported entry stays flagged
     elif library:
         if not library["gear"]:
-            knowledge.add_gear(_library(), library["id"], plan.get("gear") or [], plan.get("intent", ""))
-        if not library.get("aliases") and plan.get("intent", "artist") == "artist":
+            knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
+        if not library.get("aliases"):
             knowledge.add_aliases(_library(), library["id"], plan.get("aliases") or [])
 
     queries = plan["search_queries"] or [prompt.strip()[:80]]
