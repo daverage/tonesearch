@@ -633,3 +633,14 @@ def test_web_search_runs_in_a_killable_process():
     missing = lambda *a, **k: SimpleNamespace(stdout='{"missing": true}\n', stderr="")
     with pytest.raises(RuntimeError, match="'ddgs' package"):
         research._ddgs_search("marshall", 6, run=missing)
+
+
+def test_shortlist_keeps_every_search_in_the_running():
+    mesa = [{"id": i, "query": "Mesa Dual Rectifier", "match_score": 90} for i in range(10)]
+    bad_cat = [{"id": 100 + i, "query": "Bad Cat Hot Cat 100", "match_score": 40} for i in range(3)]
+    screamer = [{"id": 200 + i, "query": "Ibanez Tube Screamer", "match_score": 30} for i in range(8)]
+    shortlist = app_module._shortlist(mesa + bad_cat + screamer, "best-match")
+    queries = [pack["query"] for pack in shortlist]
+    assert len(shortlist) == 12 and queries.count("Bad Cat Hot Cat 100") == 3
+    assert queries.count("Mesa Dual Rectifier") == 5 and queries.count("Ibanez Tube Screamer") == 4
+    assert shortlist[0]["match_score"] == 90  # still ordered by the chosen sort

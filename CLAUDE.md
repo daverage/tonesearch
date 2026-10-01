@@ -30,7 +30,7 @@ TONE Search is a Flask app. A user describes a guitar tone; the app returns an A
 1. Optionally gather web notes.
 2. `ai.plan_tone` produces a summary and search queries.
 3. `tone3000_search` runs for each query; results are deduplicated.
-4. The results are sorted by catalogue score and cut to 12, because small models stop scoring partway through long lists.
+4. The results are cut to 12, taking turns between the queries (best first by the chosen sort within each) so one piece of gear can't fill the list; small models stop scoring partway through long lists.
 5. `ai.rank_packs` assigns `ai_fit`/`ai_why`.
 
 Each search and pack question has an overall budget, `app.REQUEST_BUDGET_SECONDS` (85s, env `TONESEARCH_REQUEST_BUDGET_SECONDS`), because Cloudflare's proxy ends requests after about 100s. `plan_tone` must finish `RANKING_RESERVE_SECONDS` early, and ranking is skipped with a warning when under 8s remain. Failures in web research, TONE3000, or ranking become `warnings` rather than errors. Only a failure in `plan_tone` returns an error, a 503. Upstream failures use 503 rather than 502 because Cloudflare replaces the body of a 502 with its own page.

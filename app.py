@@ -111,7 +111,17 @@ def _shortlist(packs: list, sort: str) -> list:
         key, reverse = (lambda p: p.get("catalog_order", 999)), False
     else:  # best match: word overlap with the searches, then popularity
         key, reverse = (lambda p: (p.get("match_score", 0), p.get("downloads_count") or 0)), True
-    return sorted(packs, key=key, reverse=reverse)[:12]
+    # Take turns between the searches so one amp's packs can't fill every place: the brief lists
+    # each piece of gear for a reason, and the AI can only rank what it's shown.
+    groups: dict = {}
+    for pack in sorted(packs, key=key, reverse=reverse):
+        groups.setdefault(pack.get("query"), []).append(pack)
+    shortlist: list = []
+    while len(shortlist) < 12 and any(groups.values()):
+        for group in groups.values():
+            if group and len(shortlist) < 12:
+                shortlist.append(group.pop(0))
+    return sorted(shortlist, key=key, reverse=reverse)
 
 
 def _attachment(data: bytes, filename: str, mimetype: str) -> Response:
