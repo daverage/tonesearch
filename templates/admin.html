@@ -76,12 +76,6 @@
     {% else %}
     <p class="info">Saved web research, reused when a new search's topic strongly matches. Flagged entries aren't used until you review them. Approved entries never expire; unreviewed ones expire after {{ days|int }} days.</p>
     {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
-    {% if unlabelled %}
-    <form class="message" method="post" action="admin/gear-confidence">
-      {{ unlabelled }} gear item{{ "s" if unlabelled != 1 }} in the library {{ "have" if unlabelled != 1 else "has" }} no confidence level yet, and count as "artist" (the artist's gear, era unconfirmed).
-      <button class="btn btn-secondary btn-small" type="submit">Mark them all as "artist"</button>
-    </form>
-    {% endif %}
 
     <form class="library-filters" method="get" action="admin">
       <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear, or #8 for one entry" aria-label="Search">

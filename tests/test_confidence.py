@@ -71,21 +71,13 @@ def _auth():
     return {"Authorization": "Basic " + base64.b64encode(b"o:pw").decode(), "Origin": "http://localhost"}
 
 
-def test_admin_marks_unlabelled_gear_as_artist_and_keeps_typed_levels(monkeypatch):
+def test_admin_gear_lines_take_a_confidence_level(monkeypatch):
     monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
     db = app_module._library()
-    old = knowledge.save(db, "Periphery bass", "- a: Nolly used a Darkglass B7K. (https://x)",
-                         [{"kind": "effect", "name": "Darkglass B7K", "role": "drive"}])
-    client = app_module.app.test_client()
-    page = client.get("/admin", headers=_auth()).get_data(as_text=True)
-    assert "1 gear item in the library has no confidence level" in page
-    assert client.post("/admin/gear-confidence", headers=_auth()).status_code == 303
-    assert knowledge.get(db, old)["gear"][0]["confidence"] == "artist"
-    assert "no confidence level" not in client.get("/admin", headers=_auth()).get_data(as_text=True)
-
+    old = knowledge.save(db, "Periphery bass", "- a: Nolly used a Darkglass B7K. (https://x)")
     form = {"topic": "Periphery bass", "notes": "n", "action": "save", "status": "new",
             "gear": "effect | Darkglass B7K | drive | confirmed\nguitar | Dingwall NG-2 | the bass\namp | SVT | a | b | suggested"}
-    client.post(f"/admin/entries/{old}", data=form, headers=_auth())
+    app_module.app.test_client().post(f"/admin/entries/{old}", data=form, headers=_auth())
     gear = knowledge.get(db, old)["gear"]
     assert [(g["name"], g["role"], g["confidence"]) for g in gear] == [
         ("Darkglass B7K", "drive", "confirmed"), ("Dingwall NG-2", "the bass", "artist"), ("SVT", "a | b", "suggested")]
