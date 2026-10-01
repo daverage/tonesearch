@@ -71,9 +71,12 @@ mcp_server.library_path = _library  # the hosted MCP endpoint shares the website
 
 
 def _visitor() -> str:
-    # Passenger/Apache put the real client first in X-Forwarded-For.
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    return (forwarded.split(",")[0].strip() or request.remote_addr or "unknown")[:64]
+    # Behind Cloudflare, CF-Connecting-IP is the real client. The first X-Forwarded-For entry is whatever the
+    # client sent (Cloudflare appends to it), so trusting it would let anyone pick a new identity per request.
+    # Without Cloudflare, the last entry is the one Apache/Passenger added.
+    cloudflare = request.headers.get("CF-Connecting-IP", "").strip()
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+    return (cloudflare or forwarded or request.remote_addr or "unknown")[:64]
 
 
 def _over_limit(bucket: str) -> bool:

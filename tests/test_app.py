@@ -681,3 +681,13 @@ def test_evidence_on_a_page_about_the_topic_may_say_their():
     assert research._sentence_score(sentence, topic, page_on_topic=True) > 0
     page = f"<title>Porcupine Tree guitar tone</title><p>{sentence}</p>"
     assert "Bad Cat" in research._extract_evidence(page, "Porcupine Tree Absentia")
+
+
+def test_rate_limits_ignore_spoofed_forwarded_ips(client, monkeypatch):
+    monkeypatch.setitem(app_module.LIMITS, "flag", 1)
+    spoof = lambda fake: {"CF-Connecting-IP": "203.0.113.9", "X-Forwarded-For": f"{fake}, 203.0.113.9"}
+    client.post("/api/library/1/flag", json={}, headers=spoof("1.1.1.1"))
+    assert client.post("/api/library/1/flag", json={}, headers=spoof("2.2.2.2")).status_code == 429
+    without_cloudflare = {"X-Forwarded-For": "9.9.9.9, 198.51.100.7"}
+    with app_module.app.test_request_context(headers=without_cloudflare):
+        assert app_module._visitor() == "198.51.100.7"
