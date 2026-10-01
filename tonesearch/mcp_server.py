@@ -93,12 +93,15 @@ def web_research(description: str, *, notes=research.web_notes) -> str:
     saved = _saved_answer(description)
     entry = knowledge.find(library_path(), description)
     if saved:  # instant: the gear, searches and ranking are already worked out
+        cache.count(library_path(), "mcp_answer_saved")
         return saved + (f"\n\nResearch notes:\n{entry['notes']}" if entry else "")
     if entry:
+        cache.count(library_path(), "mcp_research_library")
         label = "reviewed by the site owner" if entry["status"] == "approved" else "not yet reviewed"
         gear = "; ".join(_gear_line(g) for g in entry["gear"])
         return (f"From TONE Search's research library ({label}).\n{entry['notes']}"
                 + (f"\nGear found earlier: {gear}" if gear else ""))
+    cache.count(library_path(), "mcp_research_web")
     found = notes(description)
     knowledge.save(library_path(), description, found)
     return found

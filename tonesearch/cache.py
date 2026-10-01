@@ -70,13 +70,51 @@ def forget_topic(db: Path | None, words: str) -> None:
         print(f"Cache unavailable: {exc}", file=sys.stderr)
 
 
-def remember(db: Path | None, key: str, fetch, max_age: float, words: str = ""):
-    """The saved value for `key` if younger than `max_age`, or `fetch()`'s result, saved for next time."""
+def remember(db: Path | None, key: str, fetch, max_age: float, words: str = "", event: str = ""):
+    """The saved value for `key` if younger than `max_age`, or `fetch()`'s result, saved for next time.
+    With `event`, counts "<event>_saved" or "<event>_fetched" for the admin page's Activity view."""
     value = get(db, key, max_age)
     if value is None:
         value = fetch()
         put(db, key, value, words)
+        count(db, f"{event}_fetched") if event else None
+    elif event:
+        count(db, f"{event}_saved")
     return value
+
+
+# ---- Activity counts: how often each step was skipped -----------------------------------------------------------
+
+def count(db: Path | None, event: str) -> None:
+    """Add one to today's count for `event` (e.g. "answer_saved", "plan_ai"); never fails a search."""
+    if db is None:
+        return
+    try:
+        with _connect(db) as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS activity (day TEXT NOT NULL, event TEXT NOT NULL,"
+                               " n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, event))")
+            connection.execute("INSERT INTO activity (day, event, n) VALUES (?, ?, 1)"
+                               " ON CONFLICT (day, event) DO UPDATE SET n = n + 1",
+                               (time.strftime("%Y-%m-%d", time.gmtime()), event))
+    except sqlite3.Error as exc:
+        print(f"Activity not counted: {exc}", file=sys.stderr)
+
+
+def activity(db: Path, days: int = 14) -> dict:
+    """{day: {event: n}} for the last `days` days, newest first."""
+    since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - (days - 1) * 86400))
+    try:
+        with _connect(db) as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS activity (day TEXT NOT NULL, event TEXT NOT NULL,"
+                               " n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, event))")
+            rows = connection.execute("SELECT day, event, n FROM activity WHERE day >= ? ORDER BY day DESC",
+                                      (since,)).fetchall()
+    except sqlite3.Error:
+        return {}
+    result: dict = {}
+    for day, event, n in rows:
+        result.setdefault(day, {})[event] = n
+    return result
 
 
 def by_prefix(db: Path | None, prefix: str, max_age: float) -> list[tuple[str, object, float]]:

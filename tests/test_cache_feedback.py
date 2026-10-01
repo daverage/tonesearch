@@ -231,3 +231,19 @@ def test_shops_and_generic_words_are_not_research():
     assert research._extract_evidence(listing, "Periphery bass") == ""
     assert "Darkglass" in research._extract_evidence(
         "<p>Periphery records bass with a Darkglass B7K preamp and a compressor pedal.</p>", "Periphery bass")
+
+
+def test_activity_counts_show_what_was_skipped(calls, monkeypatch):
+    client = app_module.app.test_client()
+    _search(client)
+    _search(client, "in absentia porcupine tree tone")
+    day = cache.activity(app_module._library())
+    counts = next(iter(day.values()))
+    assert counts["answer_worked_out"] == 1 and counts["answer_saved"] == 1
+    assert counts["research_web"] == 1 and counts["plan_ai"] == 1 and counts["rank_ai"] == 1
+    monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
+    page = client.get("/admin?view=activity", headers={
+        "Authorization": "Basic " + base64.b64encode(b"o:pw").decode()}).get_data(as_text=True)
+    assert "Searches answered from a saved answer" in page and "<h1>Activity</h1>" in page
+    assert "Research library" in page  # the nav, but not the library list
+    assert "Also known as" not in page

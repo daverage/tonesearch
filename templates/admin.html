@@ -29,12 +29,31 @@
 </head>
 <body>
   <main class="library">
-    <h1>{{ "Feedback" if view == "feedback" else "Research library" }}</h1>
+    <h1>{{ {"feedback": "Feedback", "activity": "Activity"}.get(view, "Research library") }}</h1>
     <nav class="library-filters" aria-label="Admin sections">
       <a class="btn btn-small {{ 'btn-primary' if view != 'feedback' else 'btn-secondary' }}" href="admin">Research library</a>
       <a class="btn btn-small {{ 'btn-primary' if view == 'feedback' else 'btn-secondary' }}" href="admin?view=feedback">Feedback</a>
+      <a class="btn btn-small {{ 'btn-primary' if view == 'activity' else 'btn-secondary' }}" href="admin?view=activity">Activity</a>
     </nav>
-    {% if view == "feedback" %}
+    {% if view == "activity" %}
+    <p class="info">How often each step was skipped by reusing saved work, per day (UTC). Paired rows show reused against worked out.</p>
+    {% if activity %}
+    {% set days = activity.keys()|list %}
+    <table class="feedback-table">
+      <thead><tr><th>Step</th>{% for day in days %}<th>{{ day[5:] }}</th>{% endfor %}<th>Total</th></tr></thead>
+      <tbody>
+      {% for event, label in events %}
+        <tr><td>{{ label }}</td>
+          {% set ns = namespace(total=0) %}
+          {% for day in days %}{% set n = activity[day].get(event, 0) %}{% set ns.total = ns.total + n %}<td>{{ n or "" }}</td>{% endfor %}
+          <td><strong>{{ ns.total }}</strong></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p>No searches counted yet. Counts start once this version is live.</p>{% endif %}
+    {% endif %}
+    {% if view == "activity" %}
+    {% elif view == "feedback" %}
     {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
     <h2>Topics</h2>
     <p class="info">Most reported briefs first. Open a topic in the research library to fix its notes and gear.</p>

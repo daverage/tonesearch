@@ -553,7 +553,8 @@ def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str 
         tones = payload.get("data", []) if isinstance(payload, dict) else []
         return [tone for tone in tones if isinstance(tone, dict)]
     # Public catalogue data, the same for every key, so it's shared between visitors and the MCP server.
-    tones = cache.remember(cache_db, "search:" + json.dumps(params, sort_keys=True), fetch, cache.CATALOGUE_SECONDS)
+    tones = cache.remember(cache_db, "search:" + json.dumps(params, sort_keys=True), fetch, cache.CATALOGUE_SECONDS,
+                           event="catalogue")
     results = []
     for position, tone in enumerate(tones):
         # An id-less entry can never be turned into a working discuss/download

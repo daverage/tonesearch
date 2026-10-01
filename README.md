@@ -354,6 +354,7 @@ Only a first search uses saved answers; a refinement depends on the whole conver
 - Pack ratings re-order results for that tone: each net vote moves a pack 8 fit points, up to 3 votes either way.
 - A "wrong" brief reports its research (as **Report wrong research** does) and clears that tone's saved answers.
 - Editing or deleting a research library entry on `/admin` also clears that tone's saved answers.
+- `/admin` → **Activity** counts, per day, how many searches were answered from saved answers (directly or by alias) against worked out fresh, and how often research, plans, rankings and TONE3000 searches were reused against done again, for the website and MCP.
 - `/admin` → **Feedback** lists the topics with the most bad briefs, and recent votes with their comments.
 
 ---

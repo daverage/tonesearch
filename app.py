@@ -233,6 +233,25 @@ def _admin_denied():
     return None
 
 
+# The Activity view's rows: (event, label). Pairs show what was skipped against what had to be done.
+ACTIVITY_EVENTS = (
+    ("answer_saved", "Searches answered from a saved answer (no AI, web or TONE3000)"),
+    ("answer_saved_alias", "…found under another name (aliases)"),
+    ("answer_worked_out", "Searches worked out fresh"),
+    ("research_library", "Research taken from the library"),
+    ("research_web", "Research searched on the web"),
+    ("plan_saved", "Tone plans reused"),
+    ("plan_ai", "Tone plans asked of the AI"),
+    ("rank_saved", "Rankings reused"),
+    ("rank_ai", "Rankings asked of the AI"),
+    ("catalogue_saved", "TONE3000 searches answered from the cache"),
+    ("catalogue_fetched", "TONE3000 searches sent to TONE3000"),
+    ("mcp_answer_saved", "MCP: saved answers returned"),
+    ("mcp_research_library", "MCP: research taken from the library"),
+    ("mcp_research_web", "MCP: research searched on the web"),
+)
+
+
 def _parse_gear(text: str) -> list:
     """Admin gear lines, "kind | name | role | confidence"; a line without a confidence level counts as "artist"."""
     gear = []
@@ -252,6 +271,9 @@ def admin():
     if denied := _admin_denied():
         return denied
     q, status = request.args.get("q", "")[:100], request.args.get("status", "")
+    if request.args.get("view") == "activity":
+        return render_template("admin.html", view="activity", activity=cache.activity(_library()),
+                               events=ACTIVITY_EVENTS, q="", message="")
     if request.args.get("view") == "feedback":
         vote = {"good": 1, "bad": -1}.get(request.args.get("vote", ""))
         return render_template("admin.html", view="feedback", q=q, vote=request.args.get("vote", ""),
@@ -322,15 +344,19 @@ def api_search():
     reusable = bool(words) and not history and reuse is None
     result_key = f"result:{words}:{use_web}:{json.dumps(filters, sort_keys=True)}"
     if reusable and not fresh:
-        saved = (cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
-                 or _saved_answer_by_alias(prompt, use_web, filters))
+        saved = cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
+        how = "answer_saved"
+        if not saved:
+            saved, how = _saved_answer_by_alias(prompt, use_web, filters), "answer_saved_alias"
         if saved:
+            cache.count(_library(), how)
             feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
             return jsonify({**saved, "cached": True})  # no AI, web or TONE3000 calls, so no hourly limit spent
 
     if not _brings_own("provider", "api_key", "tone3000_api_key") and _over_limit("search"):
         return _limited()
 
+    cache.count(_library(), "answer_worked_out")
     deadline = time.monotonic() + REQUEST_BUDGET_SECONDS
     warnings: list = []
     research = ""
@@ -340,8 +366,10 @@ def api_search():
         library = knowledge.find(_library(), topic if history else prompt)
         if library:
             research = library["notes"]
+            cache.count(_library(), "research_library")
         else:
             try:
+                cache.count(_library(), "research_web")
                 research = web_notes(prompt.strip())
                 fresh_research = True
             except RuntimeError as exc:
@@ -349,8 +377,11 @@ def api_search():
     plan_key = f"plan:{words}:{use_web}"
     if plan is None and reusable and not fresh and not fresh_research:
         plan = cache.get(_library(), plan_key, cache.AI_SECONDS)
+        if plan:
+            cache.count(_library(), "plan_saved")
     try:
         if plan is None:
+            cache.count(_library(), "plan_ai")
             plan = ai.plan_tone(prompt, research_notes=research, history=history,
                                 deadline=deadline - RANKING_RESERVE_SECONDS)
             if reusable:
@@ -386,12 +417,15 @@ def api_search():
     if packs:
         rank_key = f"rank:{words}:{use_web}:{','.join(str(p['id']) for p in sorted(packs, key=lambda p: p['id']))}"
         scores = cache.get(_library(), rank_key, cache.AI_SECONDS) if reusable and not fresh else None
+        if scores is not None:
+            cache.count(_library(), "rank_saved")
         if scores is None:
             scores = {}
             if deadline - time.monotonic() < 8:
                 warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
             else:
                 try:
+                    cache.count(_library(), "rank_ai")
                     scores = ai.rank_packs(prompt, ai.gear_summary(plan), packs, deadline=deadline)
                     if reusable:
                         cache.put(_library(), rank_key, {str(k): v for k, v in scores.items()}, words)
