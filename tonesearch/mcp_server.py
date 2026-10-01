@@ -19,8 +19,9 @@ from tonesearch import cache, feedback, knowledge, overrides, research
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 INSTRUCTIONS = """TONE Search finds TONE3000 NAM (Neural Amp Modeler) capture packs for a guitar tone.
 You do the thinking; these tools fetch data. Workflow:
-1. Always call web_research first with the user's description to learn the actual rig (amp, pedals, cab).
-   Skip it only when the user already names the exact gear. Base your queries on what it finds.
+1. Always call web_research first with the user's description, even if you know the gear: when TONE Search
+   already has an answer for this tone it returns it instantly (brief, gear and packs ranked by players' votes).
+   Otherwise it researches the actual rig (amp, pedals, cab) on the web. Base your queries on what it finds.
 2. Plan 1-3 short catalogue queries naming gear, e.g. "Marshall Plexi" or "Klon Centaur", not song titles.
    Use lookup to find exact make, tag or creator slugs before using them as filters.
 3. Call search_packs for each query and merge the results by id.
@@ -42,11 +43,47 @@ def library_path() -> Path:
     return folder / "knowledge.sqlite3"
 
 
+def _saved_answer(description: str) -> str:
+    """The website's saved answer for the same rig: its brief and ranked packs, with players' votes."""
+    wanted = knowledge.identity_words(knowledge.topic_words(description))
+    if not wanted:
+        return ""
+    best, best_score = None, 0.0
+    for words, answer, created in cache.by_prefix(library_path(), "result:", cache.CATALOGUE_SECONDS):
+        theirs = knowledge.identity_words(words.split())
+        score = len(wanted & theirs) / len(wanted | theirs) if theirs else 0
+        if score >= knowledge.MATCH_THRESHOLD and score > best_score:  # rows come newest first: ties keep it
+            best, best_score = (words, answer, created), score
+    if best is None:
+        return ""
+    words, answer, created = best
+    plan, packs = answer.get("plan") or {}, answer.get("results") or []
+    feedback.apply_votes(packs, feedback.pack_votes(library_path(), words))
+    lines = [f"TONE Search's saved answer for \"{answer.get('topic', words)}\" "
+             f"({time.strftime('%d %b %Y', time.gmtime(created))}; packs ranked by the site's AI, then players' votes):",
+             f"Summary: {plan.get('summary', '')}"]
+    gear = "; ".join(f"{g.get('kind', '')}: {g.get('name', '')}" for g in plan.get("gear") or [])
+    if gear:
+        lines.append(f"Gear: {gear}")
+    if answer.get("queries"):
+        lines.append("Catalogue searches used: " + ", ".join(answer["queries"]))
+    lines.append("Ranked packs:")
+    for pack in packs[:12]:
+        fit = f"{pack['ai_fit']}% fit" if "ai_fit" in pack else "unranked"
+        votes = f", {pack['votes']:+d} player votes" if pack.get("votes") else ""
+        lines.append(f"- [{pack['id']}] {pack.get('title', '')} by {pack.get('creator', '')}: {fit}{votes}. "
+                     f"{pack.get('ai_why', '')} {pack.get('url') or download_link(pack['id'])}")
+    return "\n".join(lines)
+
+
 def web_research(description: str, *, notes=research.web_notes) -> str:
     description = description.strip()
     if not 0 < len(description) <= 500:
         raise ToolError("Describe the tone in 1-500 characters.")
+    saved = _saved_answer(description)
     entry = knowledge.find(library_path(), description)
+    if saved:  # instant: the gear, searches and ranking are already worked out
+        return saved + (f"\n\nResearch notes:\n{entry['notes']}" if entry else "")
     if entry:
         label = "reviewed by the site owner" if entry["status"] == "approved" else "not yet reviewed"
         gear = "; ".join(f"{g.get('kind', '')}: {g.get('name', '')}" for g in entry["gear"])
@@ -118,13 +155,15 @@ def _strings(description):
 
 
 TOOLS = {
-    "web_research": (web_research, "Search the web for the gear behind a described guitar tone (artist, song, era). "
-                                   "Call this first, before search_packs, unless the user names the exact gear. "
-                                   "Returns short cited notes. Slow: up to about 30 seconds.", {
+    "web_research": (web_research, "Call this first for any tone request, even if you know the gear. Returns "
+                                   "TONE Search's saved answer for the tone when one exists (instant: brief, gear and "
+                                   "ranked packs with players' votes); otherwise researches the gear behind a guitar "
+                                   "or bass tone (artist, song, era) on the web, returning short cited notes, which "
+                                   "can take up to about 30 seconds.", {
         "description": {"type": "string", "description": "The tone, e.g. 'Gilmour's Comfortably Numb solo'"},
     }, ["description"]),
     "search_packs": (search_packs, "Search TONE3000 for NAM capture packs with one short gear query, e.g. 'Vox AC30'. "
-                                   "Call web_research first to learn the gear, unless the user names it exactly. "
+                                   "Call web_research first: it may already have ranked packs for this tone. "
                                    "Returns up to 8 packs with a metadata match score.", {
         "query": {"type": "string", "description": "A short gear query, 1-80 characters"},
         "gears": {**_strings("Gear types"), "items": {"type": "string", "enum": list(research.GEARS)}},

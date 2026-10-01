@@ -173,3 +173,14 @@ def test_new_packs_appear_after_a_day_without_asking_the_ai_again(calls, monkeyp
     monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [{"id": 3, "title": "New Bad Cat", "match_score": 9}])
     _search(client)
     assert calls["plan"] == 1 and calls["rank"] == 2  # same packs again: the saved ranking is reused
+
+
+def test_mcp_research_returns_the_websites_saved_answer(calls):
+    client = app_module.app.test_client()
+    first = _search(client, "Periphery bass compressed distorted highs but clear lows")
+    client.post("/api/feedback", json={"topic": first["topic"], "target": "pack", "vote": 1, "pack_id": 2})
+    saved = mcp_server.web_research("periphery bass", notes=lambda text: pytest.fail("should not search the web"))
+    assert saved.startswith("TONE Search's saved answer") and "Bad Cat crunch" in saved
+    assert "[1] Bad Cat Hot Cat" in saved and "+1 player votes" in saved and "Research notes:" in saved
+    fresh = mcp_server.web_research("Periphery guitar", notes=lambda text: NOTES)  # a different rig: no reuse
+    assert fresh == NOTES

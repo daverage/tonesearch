@@ -77,3 +77,18 @@ def remember(db: Path | None, key: str, fetch, max_age: float, words: str = ""):
         value = fetch()
         put(db, key, value, words)
     return value
+
+
+def by_prefix(db: Path | None, prefix: str, max_age: float) -> list[tuple[str, object, float]]:
+    """(words, value, created) for every unexpired value whose key starts with `prefix`, newest first."""
+    if db is None:
+        return []
+    try:
+        with _connect(db) as connection:
+            rows = connection.execute(
+                "SELECT words, value, created FROM cache WHERE key >= ? AND key < ? AND created >= ?"
+                " ORDER BY created DESC", (prefix, prefix + "\uffff", time.time() - max_age)).fetchall()
+    except sqlite3.Error as exc:
+        print(f"Cache unavailable: {exc}", file=sys.stderr)
+        return []
+    return [(words, json.loads(value), created) for words, value, created in rows]

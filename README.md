@@ -303,7 +303,7 @@ It should call the tools: usually `web_research`, then a few `search_packs` call
 
 | Tool | What it does |
 |---|---|
-| `web_research` | Web notes about the gear behind a described tone (your key is checked with TONE3000 first) |
+| `web_research` | TONE Search's saved answer for the tone if there is one (brief, gear and packs ranked with players' votes, instantly); otherwise web notes about the gear behind it |
 | `search_packs` | TONE3000 search for one gear query, with filters |
 | `lookup` | Exact slugs for the makes, tags and creators filters |
 | `list_pack_models` | The model files in a pack |
