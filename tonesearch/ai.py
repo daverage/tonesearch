@@ -768,6 +768,8 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "or album, list that player's documented gear for it.\n"
         "  Classify kind by what the product IS, not by its brand: a stompbox is an effect even from an amp maker "
         "(Marshall Shredmaster, Marshall Guv'nor, Marshall Bluesbreaker pedal, Boss DS-1, ProCo RAT, Ibanez Tube Screamer). "
+        "Only list gear a source says THIS artist used: a forum member describing their own rig, or a site "
+        "recommending gear, is not the artist's gear.\n  "
         "Research notes can disagree: trust what the player said in an interview or a documented rig rundown over "
         "a tone-settings site's catalogue claims or averaged EQ settings, and include every amp the player names.\n  "
         "When research names a specific effect, use exactly that product and never swap in a different, better-known "

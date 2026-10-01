@@ -184,3 +184,14 @@ def test_mcp_research_returns_the_websites_saved_answer(calls):
     assert "[1] Bad Cat Hot Cat" in saved and "+1 player votes" in saved and "Research notes:" in saved
     fresh = mcp_server.web_research("Periphery guitar", notes=lambda text: NOTES)  # a different rig: no reuse
     assert fresh == NOTES
+
+
+def test_mcp_says_whether_a_saved_answer_was_checked(calls):
+    client = app_module.app.test_client()
+    first = _search(client, "Periphery bass")
+    unchecked = mcp_server.web_research("periphery bass", notes=lambda text: NOTES)
+    assert "Not yet checked" in unchecked and "rate_result" in unchecked
+    entry = knowledge.get(app_module._library(), first["library"]["id"])
+    knowledge.update(app_module._library(), entry["id"], topic=entry["topic"], notes=entry["notes"], gear=[], status="approved")
+    _search(client, "Periphery bass")  # the edit cleared saved answers; this saves one again
+    assert "The site owner has checked" in mcp_server.web_research("periphery bass", notes=lambda text: NOTES)

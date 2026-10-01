@@ -730,3 +730,18 @@ def test_plan_drops_generic_gear_names(monkeypatch):
         {"kind": "amp", "name": "Clean amp"}, {"kind": "effect", "name": "Darkglass Microtubes B7K"}]})
     plan = ai.plan_tone("Periphery bass", opener=lambda req, timeout: _Response({"choices": [{"message": {"content": content}}]}))
     assert [g["name"] for g in plan["gear"]] == ["Darkglass Microtubes B7K"] and plan["search_queries"] == ["Darkglass B7K"]
+
+
+def test_forum_posts_about_a_posters_own_rig_are_not_evidence():
+    page = ("<title>Periphery bass tone - TalkBass</title>"
+            "<p>My rig is an Ampeg SVT into an 8x10 cab with a Wren and Cuff Pickle Pie fuzz pedal.</p>"
+            "<p>Running a Thunderbird through an SVT head and a big muff fuzz pedal works well.</p>"
+            "<p>Periphery bass on the album was a Darkglass B7K preamp into a compressor, from the rig rundown.</p>")
+    found = research._extract_evidence(page, "Periphery bass", forum=True)
+    assert "Darkglass" in found and "SVT" not in found and "Thunderbird" not in found
+    assert research._is_forum("https://www.talkbass.com/threads/periphery-tone.123/")
+    assert research._is_forum("https://www.reddit.com/r/Peripheryband/comments/x/")
+    assert not research._is_forum("https://www.guitarfxdepot.com/rigs/steven-wilson-guitar-rig/")
+    # Not a forum: an interview quote on a page about the artist still counts.
+    interview = "<title>Periphery bass rig</title><p>We had a Darkglass B7K preamp and a Cali76 compressor pedal in the studio.</p>"
+    assert "Darkglass" in research._extract_evidence(interview, "Periphery bass")

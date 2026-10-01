@@ -212,20 +212,35 @@ def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False
     return topic * 2 + gear + len(set(words) & _CONTEXT_WORDS)
 
 
-def _extract_evidence(html: str, topic: str) -> str:
+# Forum threads about an artist are mostly members describing their own rigs ("my SVT into an 8x10"), so on a
+# forum a sentence only counts when it names the artist, and never when it's about the poster's own gear.
+_FORUM = re.compile(r"(^|\.)(talkbass|thegearpage|gearspace|reddit|ultimate-guitar|seymourduncan|rig-talk|"
+                    r"sevenstring|harmony-central|basschat|musicplayers|fractalaudio|line6)\.|^forums?\.|"
+                    r"/(forums?|threads?|showthread|viewtopic|comments|community)\b", re.IGNORECASE)
+_OWN_RIG = re.compile(r"\b(my|mine|i use|i run|i play|i've got|i have)\b", re.IGNORECASE)
+
+
+def _is_forum(href: str) -> bool:
+    parsed = urlparse(href)
+    return bool(_FORUM.search((parsed.hostname or "").lower()) or _FORUM.search(parsed.path))
+
+
+def _extract_evidence(html: str, topic: str, forum: bool = False) -> str:
     """The best few sentences of a page about the requested rig, in page order."""
     parser = _PageText()
     parser.feed(html)
     topic_words = {w.lower() for w in re.findall(r"[A-Za-z0-9']{3,}", topic)}
     text = "".join(parser.parts)
     opening = set(re.findall(r"[a-z0-9']+", text[:3000].lower()))  # title and first lines say what a page is about
-    page_on_topic = len(opening & topic_words) >= min(2, len(topic_words))
+    page_on_topic = not forum and len(opening & topic_words) >= min(2, len(topic_words))
     candidates, seen = [], set()
     for block in text.split("\n"):
         block = re.sub(r"\s+", " ", block).strip()
         for sentence in re.split(r"(?<=[.!?])\s+", block):
             sentence = sentence.strip()
             if sentence.lower() in seen:  # pages often repeat a line (summary box + body)
+                continue
+            if forum and _OWN_RIG.search(sentence):
                 continue
             if sentence[-1:] in ".!?\"”)" and (score := _sentence_score(sentence, topic_words, page_on_topic)):
                 seen.add(sentence.lower())
@@ -248,7 +263,7 @@ def _page_evidence(href: str, topic: str) -> str:
             html = response.read(750_000).decode("utf-8", errors="ignore")
     except Exception:
         return ""
-    return _extract_evidence(html, topic)
+    return _extract_evidence(html, topic, forum=_is_forum(href))
 
 
 # ddgs's native HTTP client (primp) can block forever while holding Python's GIL: on macOS, two searches in

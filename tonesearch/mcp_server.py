@@ -59,6 +59,8 @@ def _saved_answer(description: str) -> str:
     words, answer, created = best
     plan, packs = answer.get("plan") or {}, answer.get("results") or []
     feedback.apply_votes(packs, feedback.pack_votes(library_path(), words))
+    entry = knowledge.find(library_path(), description)
+    checked = bool(entry and entry["status"] == "approved")
     lines = [f"TONE Search's saved answer for \"{answer.get('topic', words)}\" "
              f"({time.strftime('%d %b %Y', time.gmtime(created))}; packs ranked by the site's AI, then players' votes):",
              f"Summary: {plan.get('summary', '')}"]
@@ -73,6 +75,10 @@ def _saved_answer(description: str) -> str:
         votes = f", {pack['votes']:+d} player votes" if pack.get("votes") else ""
         lines.append(f"- [{pack['id']}] {pack.get('title', '')} by {pack.get('creator', '')}: {fit}{votes}. "
                      f"{pack.get('ai_why', '')} {pack.get('url') or download_link(pack['id'])}")
+    lines.append("The site owner has checked this research." if checked else
+                 "Not yet checked by the site owner. If its gear isn't what this artist actually used, tell the user, "
+                 "call rate_result with rating 'bad' and a short comment (that clears it for everyone), and call "
+                 "web_research again for fresh research.")
     return "\n".join(lines)
 
 
