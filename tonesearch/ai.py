@@ -22,7 +22,7 @@ from urllib.request import Request, build_opener, urlopen
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tonesearch import overrides
-from tonesearch.research import _is_safe_public_host, _NoRedirectHandler
+from tonesearch.research import _NEEDS, _is_safe_public_host, _NoRedirectHandler
 
 MAX_RESPONSE_BYTES = 1_000_000
 
@@ -390,7 +390,7 @@ def _normalise(model, value: object) -> object:
         return {**value, "summary": summary if isinstance(summary, str) else "", "gear": gear[:12],
                 "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6),
                 "aliases": _text_list(value.get("aliases"), 16),
-                "intent": _INTENT_SYNONYMS.get(str(value.get("intent") or "").strip().lower(), "artist"),
+                "intent": _INTENT_SYNONYMS.get(str(value.get("intent") or "").strip().lower(), ""),  # "" = not given
                 "requirements": _text_list(value.get("requirements") or value.get("constraints") or value.get("needs"), 12)}
     if model is _PackAnswer:
         value = _unwrap(value, {"reply"})
@@ -876,7 +876,7 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         plan.search_queries = [q for q in plan.search_queries if not _PRACTICE_AMPS.search(q)]
     for gear in plan.gear:
         gear.confidence = confidence_of(gear.confidence)
-    intent = plan.intent if plan.intent in INTENTS else "artist"
+    intent = _intent(plan, prompt)
     if intent == "requirements":  # keep to the kinds of gear the request asks for: amps (and amp sims) always
         plan.gear = [g for g in plan.gear if g.kind in ("amp", "other") or
                      (g.kind in _ASKS_FOR and _ASKS_FOR[g.kind].search(prompt)) or
@@ -910,6 +910,17 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "intent": intent,
         "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8] if intent == "requirements" else [],
     }
+
+
+def _intent(plan, prompt: str) -> str:
+    """The plan's intent, checked: small models skip it or default to "artist". A request with two or more "needs"
+    words ("combo", "gigging", "pedal platform") and no names for an artist, band or song is a requirements one."""
+    needs = len(_NEEDS.findall(prompt)) >= 2
+    if plan.intent not in INTENTS:
+        return "requirements" if needs else ("artist" if plan.aliases else "sound")
+    if plan.intent == "artist" and needs and not plan.aliases:
+        return "requirements"
+    return plan.intent
 
 
 def _names_guess(query: str, guesses: set) -> bool:

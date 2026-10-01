@@ -124,3 +124,27 @@ def test_requirement_requests_research_specs_not_rigs(monkeypatch):
     with pytest.raises(RuntimeError):
         research.web_notes("Periphery bass tone", search=lambda q, *a, **k: asked.append(q) or [])
     assert asked and all("bassist" in q for q in asked if q != "Periphery bass")  # the last try is the bare topic
+
+
+@pytest.mark.parametrize("intent, aliases, expected", [
+    (None, [], "requirements"),          # not given: "needs" words decide
+    ("artist", [], "requirements"),      # a small model's default, with no artist named
+    ("artist", ["SRV"], "artist"),       # a named artist with needs words stays an artist request
+    ("requirements", [], "requirements"),
+])
+def test_intent_is_checked_against_the_request(intent, aliases, expected):
+    body = {"summary": "s", "advice": [], "search_queries": ["Fender Blues Deluxe"], "aliases": aliases,
+            "gear": [{"kind": "amp", "name": "Fender Blues Deluxe Reissue"}]}
+    if intent:
+        body["intent"] = intent
+    plan = ai.plan_tone("amp cab combo good pedal platform gigging", opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    assert plan["intent"] == expected
+    assert plan["gear"][0]["confidence"] == "artist"  # unlabelled: a partial match for requirements
+
+
+def test_a_described_sound_without_needs_or_names_is_a_sound_request():
+    body = {"summary": "s", "advice": [], "search_queries": ["Vox AC30"], "gear": []}
+    plan = ai.plan_tone("chimey jangly clean", opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    assert plan["intent"] == "sound"
