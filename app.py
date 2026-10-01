@@ -283,6 +283,7 @@ def admin():
     counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
     return render_template("admin.html", view="library", entries=knowledge.search(_library(), q, status), q=q, status=status,
                            statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
+                           level_labels=ai.CONFIDENCE_LABELS,
                            message=request.args.get("message", "")[:200])
 
 
@@ -390,12 +391,12 @@ def api_search():
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
-        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"))
+        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"), plan.get("intent", ""))
         library = knowledge.get(_library(), entry_id) if entry_id else None  # a reported entry stays flagged
     elif library:
         if not library["gear"]:
-            knowledge.add_gear(_library(), library["id"], plan.get("gear") or [])
-        if not library.get("aliases"):
+            knowledge.add_gear(_library(), library["id"], plan.get("gear") or [], plan.get("intent", ""))
+        if not library.get("aliases") and plan.get("intent", "artist") == "artist":
             knowledge.add_aliases(_library(), library["id"], plan.get("aliases") or [])
 
     queries = plan["search_queries"] or [prompt.strip()[:80]]

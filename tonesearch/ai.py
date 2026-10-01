@@ -906,7 +906,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "advice": [tip.strip() for tip in plan.advice if tip.strip()][:6],
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
         "search_queries": queries[:3],
-        "aliases": [a.strip()[:60] for a in plan.aliases if a.strip()][:8],
+        # Aliases are other names for an artist's rig; for a gear recommendation they'd be product names and eras
+        # ("beatles", "british invasion") that would hand this research to someone asking for the Beatles' rig.
+        "aliases": [a.strip()[:60] for a in plan.aliases if a.strip()][:8] if intent == "artist" else [],
         "intent": intent,
         "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8] if intent == "requirements" else [],
     }

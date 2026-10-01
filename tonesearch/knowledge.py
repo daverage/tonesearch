@@ -91,6 +91,8 @@ def _connect(db: Path) -> sqlite3.Connection:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
     if "aliases" not in columns:  # added later: the AI's names for the same rig ("nolly", "steven wilson")
         connection.execute("ALTER TABLE entries ADD COLUMN aliases TEXT NOT NULL DEFAULT ''")
+    if "intent" not in columns:  # what kind of request found it (ai.INTENTS): decides what gear levels mean
+        connection.execute("ALTER TABLE entries ADD COLUMN intent TEXT NOT NULL DEFAULT ''")
     return connection
 
 
@@ -136,7 +138,8 @@ def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
 
 
 @_best_effort
-def save(db: Path, text: str, notes: str, gear: list | None = None, aliases: list | None = None) -> int | None:
+def save(db: Path, text: str, notes: str, gear: list | None = None, aliases: list | None = None,
+         intent: str = "") -> int | None:
     """Store fresh research for a topic. An approved entry is never overwritten; others are refreshed."""
     words = " ".join(topic_words(text))
     if not words or not notes.strip():
@@ -145,16 +148,18 @@ def save(db: Path, text: str, notes: str, gear: list | None = None, aliases: lis
     gear_json = json.dumps((gear or [])[:12])
     alias_words = ", ".join(clean_aliases(aliases))
     with _connect(db) as connection:
-        row = connection.execute("SELECT id, status, gear, aliases FROM entries WHERE words = ?", (words,)).fetchone()
+        row = connection.execute("SELECT id, status, gear, aliases, intent FROM entries WHERE words = ?",
+                                 (words,)).fetchone()
         if row is None:
             cursor = connection.execute(
-                "INSERT INTO entries (topic, words, notes, gear, aliases, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (_topic(text)[:200], words, notes[:6000], gear_json, alias_words, now, now))
+                "INSERT INTO entries (topic, words, notes, gear, aliases, intent, created, updated)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (_topic(text)[:200], words, notes[:6000], gear_json, alias_words, intent, now, now))
             return cursor.lastrowid
         if row["status"] != "approved":  # a flagged entry stays flagged until the owner reviews it
-            connection.execute("UPDATE entries SET notes = ?, gear = ?, aliases = ?, updated = ? WHERE id = ?",
+            connection.execute("UPDATE entries SET notes = ?, gear = ?, aliases = ?, intent = ?, updated = ? WHERE id = ?",
                                (notes[:6000], gear_json if gear else row["gear"], alias_words or row["aliases"],
-                                now, row["id"]))
+                                intent or row["intent"], now, row["id"]))
         return row["id"]
 
 
@@ -168,12 +173,13 @@ def add_aliases(db: Path, entry_id: int, aliases: list) -> None:
 
 
 @_best_effort
-def add_gear(db: Path, entry_id: int, gear: list) -> None:
-    """Fill in the gear for an entry saved without it (MCP research has no AI to read the notes)."""
+def add_gear(db: Path, entry_id: int, gear: list, intent: str = "") -> None:
+    """Fill in the gear (and what kind of request it answers) for an entry saved without it: MCP research has no
+    AI on the server to read the notes."""
     if gear:
         with _connect(db) as connection:
-            connection.execute("UPDATE entries SET gear = ? WHERE id = ? AND gear = '[]'",
-                               (json.dumps(gear[:12]), entry_id))
+            connection.execute("UPDATE entries SET gear = ?, intent = CASE WHEN intent = '' THEN ? ELSE intent END"
+                               " WHERE id = ? AND gear = '[]'", (json.dumps(gear[:12]), intent, entry_id))
 
 
 def flag(db: Path, entry_id: int, reason: str = "") -> bool:

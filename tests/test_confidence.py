@@ -148,3 +148,20 @@ def test_a_described_sound_without_needs_or_names_is_a_sound_request():
     plan = ai.plan_tone("chimey jangly clean", opener=lambda req, timeout: _Response(
         {"choices": [{"message": {"content": json.dumps(body)}}]}))
     assert plan["intent"] == "sound"
+
+
+def test_requirement_research_gets_no_aliases_and_explains_its_levels(monkeypatch):
+    body = {"summary": "Clean pedal platform.", "advice": [], "search_queries": ["Fender Deluxe Reverb"],
+            "aliases": ["blackface deluxe reverb", "british invasion", "beatles"],
+            "gear": [{"kind": "amp", "name": "Fender Deluxe Reverb"}, {"kind": "cab", "name": "Fender 4x10"}]}
+    plan = ai.plan_tone("clean pedal platform amp cab gigging", opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    assert plan["intent"] == "requirements" and plan["aliases"] == []
+    assert [g["name"] for g in plan["gear"]] == ["Fender Deluxe Reverb"]  # "amp cab" didn't ask for a cab
+    db = app_module._library()
+    entry_id = knowledge.save(db, "clean pedal platform amp cab gigging", "- a: notes. (https://x)", plan["gear"],
+                              plan["aliases"], plan["intent"])
+    assert knowledge.find(db, "Beatles British Invasion") is None
+    monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
+    page = app_module.app.test_client().get(f"/admin?q=%23{entry_id}", headers=_auth()).get_data(as_text=True)
+    assert "Gear recommendation research" in page and "<strong>artist</strong> = partial match" in page
