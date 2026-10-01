@@ -382,7 +382,9 @@ def _normalise(model, value: object) -> object:
             name = str(item.get("name") or "").strip()
             if name:
                 kind = _KIND_SYNONYMS.get(str(item.get("kind") or item.get("type") or "other").strip().lower(), "other")
-                gear.append({"kind": kind, "name": name[:80], "role": str(item.get("role") or "")[:240]})
+                _alias(item, "confidence", "evidence", "certainty", "scope", "evidence_scope")
+                gear.append({"kind": kind, "name": name[:80], "role": str(item.get("role") or "")[:240],
+                             "confidence": confidence_of(item.get("confidence"))})
         summary = value.get("summary")
         return {**value, "summary": summary if isinstance(summary, str) else "", "gear": gear[:12],
                 "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6)}
@@ -628,6 +630,7 @@ class _Gear(_Model):
     kind: str = "other"
     name: str = Field(min_length=1, max_length=80)
     role: str = Field(default="", max_length=240)
+    confidence: str = "artist"
 
 
 class _Plan(_Model):
@@ -653,6 +656,22 @@ class _PackAnswer(_Model):
 
 
 _GEAR_KINDS = {"amp", "effect", "guitar", "pickup", "cab", "other"}
+# How sure the research is that this gear made this tone. Unlabelled gear (older saved plans and library entries)
+# counts as "artist": documented for the player, but not shown to be on this recording.
+CONFIDENCE = ("confirmed", "artist", "suggested")
+_CONFIDENCE_SYNONYMS = {
+    "confirmed": "confirmed", "recording_confirmed": "confirmed", "documented": "confirmed", "high": "confirmed",
+    "certain": "confirmed", "verified": "confirmed", "live_era_confirmed": "confirmed", "era": "confirmed",
+    "artist": "artist", "artist_general": "artist", "artist_era_confirmed": "artist", "medium": "artist",
+    "likely": "artist", "probable": "artist", "other era": "artist",
+    "suggested": "suggested", "speculative": "suggested", "low": "suggested", "guess": "suggested",
+    "modern_equivalent": "suggested", "genre_typical": "suggested", "possible": "suggested", "unconfirmed": "suggested",
+}
+
+
+def confidence_of(value) -> str:
+    """A gear item's confidence level, "artist" when it's missing or unrecognised."""
+    return _CONFIDENCE_SYNONYMS.get(str(value or "").strip().lower(), "artist")
 
 _STYLE = (
     "You are an experienced guitar and bass tone advisor for players who use Neural Amp Modeler (NAM) "
@@ -668,7 +687,8 @@ _PLAN_SCHEMA = {
         "advice": {"type": "array", "items": {"type": "string"}},
         "gear": {"type": "array", "items": {"type": "object", "properties": {
             "kind": {"type": "string", "enum": sorted(_GEAR_KINDS)},
-            "name": {"type": "string"}, "role": {"type": "string"}}, "required": ["kind", "name"]}},
+            "name": {"type": "string"}, "role": {"type": "string"},
+            "confidence": {"type": "string", "enum": list(CONFIDENCE)}}, "required": ["kind", "name", "confidence"]}},
         "search_queries": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["summary", "advice", "gear", "search_queries"],
@@ -762,7 +782,14 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "If the request is about a BASS tone, describe the bass sound and list only the bassist's gear (bass amps, "
         "bass preamps, DIs and pedals such as a Darkglass or SansAmp, the bass itself): never the band's guitar rig. "
         "A bass sound described as distorted highs over clean lows usually means a split or parallel chain: say so.\n"
-        "- gear: the specific products that define this tone, each with kind, name and a short role. Use real "
+        "- gear: the specific products that define this tone, each with kind, name, a short role and confidence:\n"
+        "  confidence 'confirmed' = a source documents it for this recording, album or era; 'artist' = documented for "
+        "this player but in another era or with no era given (including a site's whole-career gear list); "
+        "'suggested' = a modern equivalent, a replica, typical of the genre, or your inference. Never call gear "
+        "'confirmed' because it is famous, and never turn a site's 'modern equivalent' into the original.\n"
+        "  Name only as much as the source supports: 'Vox AC30', not an AC30 variant the source doesn't name. Don't "
+        "name a pedal model just because the tone has that effect: put 'dotted-eighth delay' or 'compressor' in advice, "
+        "not gear. Use real "
         "make and model names (for example 'Fender Vibroverb', 'Ibanez TS808 Tube Screamer', 'Fender Stratocaster'), "
         "never generic categories like 'tube amplifier' or 'overdrive pedal'. If the request names an artist, song "
         "or album, list that player's documented gear for it.\n"
@@ -794,12 +821,19 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
     if not _WANTS_MODERN.search(prompt):  # drop "recreate it at home" suggestions the model copied from tone sites
         plan.gear = [g for g in plan.gear if not _PRACTICE_AMPS.search(g.name)]
         plan.search_queries = [q for q in plan.search_queries if not _PRACTICE_AMPS.search(q)]
+    for gear in plan.gear:
+        gear.confidence = confidence_of(gear.confidence)
+    # Search for what the research supports: confirmed gear, else the artist's documented gear; never guesses.
+    trusted = [g for g in plan.gear if g.confidence == "confirmed"] or [g for g in plan.gear if g.confidence == "artist"]
+    guesses = {g.name.lower() for g in plan.gear if g.confidence == "suggested"}
+    if trusted:
+        plan.search_queries = [q for q in plan.search_queries if not _names_guess(q, guesses)]
     queries = list(dict.fromkeys(q.strip()[:80] for q in plan.search_queries if q and q.strip()))
     if not _WANTS_GUITAR.search(prompt):
         guitars = {g.name.lower() for g in plan.gear if g.kind in ("guitar", "pickup")}
         queries = [q for q in queries if q.lower() not in guitars and not _GUITAR_MODELS.search(q)]
         # Spare slots go to amps from the gear list that no query covers yet.
-        for amp in (g.name.strip() for g in plan.gear if g.kind == "amp"):
+        for amp in (g.name.strip() for g in (trusted or plan.gear) if g.kind == "amp"):
             covered = any(set(amp.lower().split()) & set(q.lower().split()) - {"amp", "head", "combo"} for q in queries)
             if len(queries) < 3 and amp and not covered:
                 queries.append(amp[:80])
@@ -809,6 +843,22 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
         "search_queries": queries[:3],
     }
+
+
+def _names_guess(query: str, guesses: set) -> bool:
+    """True when a search is for a 'suggested' item: its words are all part of that item's name."""
+    words = set(query.lower().split())
+    return any(words and words <= set(name.split()) for name in guesses)
+
+
+def gear_summary(plan: dict) -> str:
+    """The plan's summary plus its gear by confidence, so ranking favours captures of confirmed gear."""
+    groups = {level: [g["name"] for g in plan.get("gear") or [] if confidence_of(g.get("confidence")) == level]
+              for level in CONFIDENCE}
+    labels = {"confirmed": "Confirmed for this recording", "artist": "The artist's documented gear (era unconfirmed)",
+              "suggested": "Suggested substitutes only"}
+    lines = [f"{labels[level]}: {', '.join(names)}." for level, names in groups.items() if names]
+    return " ".join([plan.get("summary", ""), *lines]).strip()
 
 
 def rank_packs(prompt: str, summary: str, packs: list, *, opener=urlopen, deadline: Optional[float] = None) -> dict:
@@ -822,6 +872,8 @@ def rank_packs(prompt: str, summary: str, packs: list, *, opener=urlopen, deadli
         + "\n".join(lines)
         + "\n\nScore EVERY candidate with fit 0-100 using this scale, and give why in one short sentence that names "
         "the deciding detail:\n"
+        "Prefer captures of gear confirmed for this recording, then the artist's documented gear; suggested "
+        "substitutes are only stand-ins.\n"
         "- 90-100: the same product (or the exact rig) the request calls for.\n"
         "- 70-89: the same model family, or a very close substitute that will get the player there.\n"
         "- 40-69: a plausible alternative that needs tweaking.\n"

@@ -46,6 +46,10 @@ def library_path() -> Path:
     return folder / "knowledge.sqlite3"
 
 
+def _gear_line(g: dict) -> str:
+    return f"{g.get('kind', '')}: {g.get('name', '')} ({ai.confidence_of(g.get('confidence'))})"
+
+
 def _saved_answer(description: str) -> str:
     """The website's saved answer for the same rig: its brief and ranked packs, with players' votes."""
     wanted = knowledge.identity_words(knowledge.topic_words(description))
@@ -67,9 +71,9 @@ def _saved_answer(description: str) -> str:
     lines = [f"TONE Search's saved answer for \"{answer.get('topic', words)}\" "
              f"({time.strftime('%d %b %Y', time.gmtime(created))}; packs ranked by the site's AI, then players' votes):",
              f"Summary: {plan.get('summary', '')}"]
-    gear = "; ".join(f"{g.get('kind', '')}: {g.get('name', '')}" for g in plan.get("gear") or [])
+    gear = "; ".join(_gear_line(g) for g in plan.get("gear") or [])
     if gear:
-        lines.append(f"Gear: {gear}")
+        lines.append(f"Gear (confidence: confirmed for this recording / artist's gear, era unconfirmed / suggested): {gear}")
     if answer.get("queries"):
         lines.append("Catalogue searches used: " + ", ".join(answer["queries"]))
     lines.append("Ranked packs:")
@@ -95,7 +99,7 @@ def web_research(description: str, *, notes=research.web_notes) -> str:
         return saved + (f"\n\nResearch notes:\n{entry['notes']}" if entry else "")
     if entry:
         label = "reviewed by the site owner" if entry["status"] == "approved" else "not yet reviewed"
-        gear = "; ".join(f"{g.get('kind', '')}: {g.get('name', '')}" for g in entry["gear"])
+        gear = "; ".join(_gear_line(g) for g in entry["gear"])
         return (f"From TONE Search's research library ({label}).\n{entry['notes']}"
                 + (f"\nGear found earlier: {gear}" if gear else ""))
     found = notes(description)
@@ -156,7 +160,8 @@ def save_gear(description: str, gear: list) -> str:
         if ai._GENERIC_GEAR.match(name):
             continue  # "Compressor" is a category, not a product
         kind = item.get("kind") if item.get("kind") in GEAR_KINDS else "other"
-        items.append({"kind": kind, "name": name, "role": str(item.get("role") or "").strip()[:240]})
+        items.append({"kind": kind, "name": name, "role": str(item.get("role") or "").strip()[:240],
+                      "confidence": ai.confidence_of(item.get("confidence"))})
     if not items:
         raise ToolError("Name real products (e.g. 'Darkglass Microtubes B7K'), not categories like 'Compressor'.")
     entry = knowledge.find(library_path(), description, count_use=False)
@@ -252,7 +257,10 @@ TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research not
         "kind": {"type": "string", "enum": list(GEAR_KINDS)},
         "name": {"type": "string", "description": "Make and model, e.g. 'Darkglass Microtubes B7K'"},
         "role": {"type": "string", "description": "What it does in this tone"},
-    }, "required": ["kind", "name"]}},
+        "confidence": {"type": "string", "enum": list(ai.CONFIDENCE),
+                       "description": "confirmed: the notes document it for this recording or era; artist: documented "
+                                      "for this player, other or unknown era; suggested: a modern equivalent or guess"},
+    }, "required": ["kind", "name", "confidence"]}},
 }, ["description", "gear"])
 TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
                                     "the research and brief (leave pack_id out) or one pack. It improves future "

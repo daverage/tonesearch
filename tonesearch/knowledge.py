@@ -182,6 +182,21 @@ def update(db: Path, entry_id: int, *, topic: str, notes: str, gear: list, statu
              entry_id))
 
 
+def label_unlabelled_gear(db: Path, level: str) -> int:
+    """Set `level` on every gear item that has no confidence yet; returns how many items changed."""
+    changed = 0
+    with _connect(db) as connection:
+        for row in connection.execute("SELECT id, gear FROM entries").fetchall():
+            gear = json.loads(row["gear"] or "[]")
+            missing = [g for g in gear if isinstance(g, dict) and not g.get("confidence")]
+            for item in missing:
+                item["confidence"] = level
+            if missing:
+                connection.execute("UPDATE entries SET gear = ? WHERE id = ?", (json.dumps(gear), row["id"]))
+                changed += len(missing)
+    return changed
+
+
 @_best_effort
 def get(db: Path, entry_id: int) -> dict | None:
     with _connect(db) as connection:

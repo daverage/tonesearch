@@ -18,6 +18,9 @@
 
   const state = { history: [], goal: "", busy: false, plan: null, searchedFilters: null, log: [], packChats: new Map() };
   const GEAR_LABELS = { amp: "Amp head", "amp-cab": "Full rig", amp_cab: "Full rig", "full-rig": "Full rig", pedal: "Pedal", outboard: "Outboard", ir: "IR" };
+  // How sure the research is that the gear made this tone; unlabelled (older) gear counts as the artist's.
+  const CONFIDENCE_LABELS = { confirmed: "(confirmed)", artist: "(artist's gear, era unconfirmed)", suggested: "(suggestion)" };
+  const confidence = (g) => (g.confidence in CONFIDENCE_LABELS ? g.confidence : "artist");
   const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", other: "Other" };
 
   const el = (tag, className, text) => {
@@ -197,10 +200,9 @@
         groups[kind].forEach((g) => {
           const chip = el("span", `t3ai-chip t3ai-chip-${kind}`, g.name);
           if (g.role) { chip.title = g.role; chip.append(el("span", "visually-hidden", `: ${g.role}`)); } // the tooltip is mouse-only
-          if (/uncertain|unconfirmed|not confirmed|possibly|likely|may have|might have|disputed/i.test(g.role || "")) {
-            chip.classList.add("is-uncertain");
-            chip.append(el("span", "t3ai-chip-note", " (unconfirmed)"));
-          }
+          const level = confidence(g);
+          chip.dataset.confidence = level;
+          chip.append(el("span", "t3ai-chip-note", ` ${CONFIDENCE_LABELS[level]}`));
           row.append(chip);
         });
         gear.append(row);
@@ -818,7 +820,7 @@
         Object.keys(KIND_LABELS).forEach((kind) => {
           const items = data.plan.gear.filter((g) => g.kind === kind);
           if (!items.length) return;
-          const names = items.map((g) => `${md(g.name)}${/uncertain|unconfirmed|possibly|likely|may have|might have|disputed/i.test(g.role || "") ? " (unconfirmed)" : ""}${g.role ? `: ${md(g.role)}` : ""}`);
+          const names = items.map((g) => `${md(g.name)} ${CONFIDENCE_LABELS[confidence(g)]}${g.role ? `: ${md(g.role)}` : ""}`);
           out.push(`**${KIND_LABELS[kind]}**`, "", ...names.map((n) => `- ${n}`), "");
         });
       }

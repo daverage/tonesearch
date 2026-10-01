@@ -234,11 +234,16 @@ def _admin_denied():
 
 
 def _parse_gear(text: str) -> list:
+    """Admin gear lines, "kind | name | role | confidence"; a line without a confidence level counts as "artist"."""
     gear = []
     for line in text.splitlines():
         parts = [part.strip() for part in line.split("|")]
         if len(parts) >= 2 and parts[1]:
-            gear.append({"kind": parts[0][:20] or "other", "name": parts[1][:80], "role": " | ".join(parts[2:])[:240]})
+            level = "artist"
+            if len(parts) >= 4 and parts[-1].lower() in ai.CONFIDENCE:
+                level = parts.pop().lower()
+            gear.append({"kind": parts[0][:20] or "other", "name": parts[1][:80], "role": " | ".join(parts[2:])[:240],
+                         "confidence": level})
     return gear
 
 
@@ -254,9 +259,21 @@ def admin():
                                topics=feedback.topic_summary(_library()), message=request.args.get("message", "")[:200])
     every = knowledge.search(_library(), limit=100_000)
     counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
+    unlabelled = sum(1 for e in every for g in e["gear"] if isinstance(g, dict) and not g.get("confidence"))
     return render_template("admin.html", view="library", entries=knowledge.search(_library(), q, status), q=q, status=status,
+                           unlabelled=unlabelled,
                            statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
                            message=request.args.get("message", "")[:200])
+
+
+@app.post("/admin/gear-confidence")
+def admin_gear_confidence():
+    """Give every unlabelled gear item in the library the middle level, "artist"."""
+    if denied := _admin_denied():
+        return denied
+    changed = knowledge.label_unlabelled_gear(_library(), "artist")
+    message = f"Marked {changed} gear item{'s' if changed != 1 else ''} as the artist's gear (era unconfirmed)."
+    return redirect(f"{request.script_root}/admin?{urlencode({'message': message})}", 303)
 
 
 @app.post("/admin/entries/<int:entry_id>")
@@ -383,7 +400,7 @@ def api_search():
                 warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
             else:
                 try:
-                    scores = ai.rank_packs(prompt, plan["summary"], packs, deadline=deadline)
+                    scores = ai.rank_packs(prompt, ai.gear_summary(plan), packs, deadline=deadline)
                     if reusable:
                         cache.put(_library(), rank_key, {str(k): v for k, v in scores.items()}, words)
                 except ai.AiError as exc:

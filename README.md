@@ -308,7 +308,7 @@ It should call the tools: usually `web_research`, then a few `search_packs` call
 | `lookup` | Exact slugs for the makes, tags and creators filters |
 | `list_pack_models` | The model files in a pack |
 | `download_link` | The pack's TONE3000 page, to download it from |
-| `save_gear` | Saves the gear the assistant worked out from fresh research, so the library entry has a gear list like website searches do |
+| `save_gear` | Saves the gear the fresh research notes name, with a confidence level, so the library entry has a gear list like website searches do |
 | `rate_result` | Saves the user's verdict on the research or a pack |
 
 The `find_tone` prompt walks the assistant through the full research → search → rank workflow.
@@ -327,6 +327,7 @@ The `find_tone` prompt walks the assistant through the full research → search 
 Web research is saved in a research library (`data/knowledge.sqlite3`): the cited notes plus the gear the AI took from them. Before searching the web, a new search looks for a saved topic about the same rig. Matching ignores word order, filler and sound descriptions such as "compressed", "warm" or "clear lows", because they don't change what the artist used. "Periphery bass" matches "Periphery bass, compressed distorted highs but clear lows", and "In Absentia Porcupine Tree" matches "Porcupine Tree In Absentia tone". "Periphery" (the guitar rig), "Porcupine Tree Deadwing" and "Comfortably Numb live at Pompeii" don't match their neighbours: instrument, album, song, era and live words always count. On a match, the search skips the web and uses the saved notes. The MCP server's `web_research` reads from and adds to the same library.
 
 - **Review:** set `TONESEARCH_ADMIN_PASSWORD` and open `/admin` (any username). You can search entries and edit their topic, notes and gear. **Approve** marks an entry as checked; approved entries never expire, and new research never overwrites them. Unreviewed entries are searched again after `TONESEARCH_LIBRARY_DAYS`.
+- **Confidence:** every gear item has a confidence level. **confirmed** means a source documents it for this recording, album or era. **artist** means it's documented for the player but in another era or with no era given. **suggested** means a modern equivalent, a replica, typical of the genre, or the AI's inference. The brief labels each item, TONE3000 searches use confirmed gear first (then the artist's), suggested gear is never searched unless nothing else is known, and ranking prefers captures of confirmed gear. Gear without a level counts as **artist**; the admin page offers a button to label all of it at once. On the admin page, write gear lines as `kind | name | role | confidence`.
 - **Reports:** visitors can press **Report wrong research** under the notes. A reported entry isn't reused until you review it, and it's listed first on the admin page with the reason.
 
 ---

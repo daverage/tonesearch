@@ -207,6 +207,11 @@ def _skip_source(href: str) -> bool:
                            for pattern in _SKIP_HOSTS)
 
 
+_QUALIFIER = re.compile(r"modern equivalent|replica|recreat|reissue|stand-?in|substitut|our (catalog|catalogue)|"
+                        r"\bonly (two|three|\d+) (songs|tracks|tones)\b|not (confirmed|known|documented)|unconfirmed|"
+                        r"\bunknown\b|\blater\b (era|years|tours?)|\bera\b", re.IGNORECASE)
+
+
 def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False) -> int:
     """0 for menus and boilerplate; otherwise topic hits (weighted) plus distinct gear words."""
     words = re.findall(r"[a-z0-9']+", sentence.lower())
@@ -223,6 +228,10 @@ def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False
         return 0
     gear = len(set(words) & _GEAR_WORDS) + sum(phrase in sentence.lower() for phrase in _GEAR_PHRASES)
     topic = len(set(words) & topic_words)
+    if _QUALIFIER.search(sentence) and (topic or page_on_topic):
+        # "A modern equivalent", "our catalogue only has two songs": without these the AI takes a site's
+        # suggestions and later-era gear as what was used on the record.
+        return 6 + topic * 2 + gear
     # A product page lists gear without the artist and an album intro names the artist without gear, so a
     # sentence needs both, unless the page is about the topic and the sentence names gear twice ("their go-to
     # gear: a Dual Rectifier and a Bad Cat").
