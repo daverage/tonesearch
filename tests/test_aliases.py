@@ -37,9 +37,10 @@ def _search(prompt, **extra):
 def test_match_score_rules():
     words = " ".join(knowledge.topic_words("Periphery bass"))
     aliases = "nolly, adam getgood, periphery"
-    assert knowledge.match_score("Nolly Getgood bass", words, aliases) > 0
+    assert knowledge.match_score("Adam Getgood bass", words, aliases) > 0
+    assert knowledge.match_score("Nolly Getgood bass", words, aliases) == 0  # never pooled from two aliases
     assert knowledge.match_score("Periphery", words, aliases) == 0  # one word is not enough
-    assert knowledge.match_score("Nolly Getgood bass Juggernaut", words, aliases) == 0  # more specific than saved
+    assert knowledge.match_score("Adam Getgood bass Juggernaut", words, aliases) == 0  # more specific than saved
     assert knowledge.match_score("Nolly bass warm", words, aliases, same_sound=True) == 0  # a sound it never described
     assert knowledge.match_score("Nolly bass warm", words, aliases) > 0  # but the research still applies
 
@@ -51,12 +52,12 @@ def test_aliases_are_cleaned_of_descriptions():
 def test_a_search_under_another_name_reuses_the_saved_answer_and_research(calls):
     first = _search("Periphery bass")
     assert knowledge.get(app_module._library(), first["library"]["id"])["aliases"] == "nolly, adam getgood, periphery"
-    again = _search("Nolly Getgood bass")
+    again = _search("Adam Getgood bass")
     assert again["cached"] and calls == {"web": 1, "plan": 1}
-    other_sound = _search("Nolly Getgood bass warm")
+    other_sound = _search("Adam Getgood bass warm")
     assert not other_sound["cached"] and calls == {"web": 1, "plan": 2}  # new brief, same research
     assert other_sound["library"]["reused"]
-    assert not _search("Nolly Getgood bass", filters={"gears": ["pedal"]})["cached"]  # other filters
+    assert not _search("Adam Getgood bass", filters={"gears": ["pedal"]})["cached"]  # other filters
 
 
 def test_mcp_finds_the_saved_answer_by_alias(calls):

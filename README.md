@@ -22,6 +22,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Research library](#research-library)
 - [Saved answers and ratings](#saved-answers-and-ratings)
+  - [Starting fresh](#starting-fresh)
 - [Configuration reference](#configuration-reference)
 - [Choosing a model](#choosing-a-model)
 - [Deploying](#deploying)
@@ -41,8 +42,8 @@ One search runs this pipeline on the server:
  your description
         │
         ▼
- 1. Web research (optional) ── DuckDuckGo: two gear-focused searches (each in its own process), up to 8 pages read,
-        │                      the most gear-relevant sentences kept as notes
+ 1. Web research (optional) ── DuckDuckGo: two searches (each in its own process), up to 8 pages read,
+        │                      the most relevant passages kept as notes, with the sentences that date or qualify them
         ▼
  2. Tone plan (AI) ─────────── a summary of the tone, the gear behind it, tips,
         │                      and 1–3 short TONE3000 search queries
@@ -326,10 +327,12 @@ The `find_tone` prompt walks the assistant through the full research → search 
 
 Web research is saved in a research library (`data/knowledge.sqlite3`): the cited notes plus the gear the AI took from them. Before searching the web, a new search looks for a saved topic about the same rig. Matching ignores word order, filler and sound descriptions such as "compressed", "warm" or "clear lows", because they don't change what the artist used. "Periphery bass" matches "Periphery bass, compressed distorted highs but clear lows", and "In Absentia Porcupine Tree" matches "Porcupine Tree In Absentia tone". "Periphery" (the guitar rig), "Porcupine Tree Deadwing" and "Comfortably Numb live at Pompeii" don't match their neighbours: instrument, album, song, era and live words always count. On a match, the search skips the web and uses the saved notes. The MCP server's `web_research` reads from and adds to the same library.
 
-- **Review:** set `TONESEARCH_ADMIN_PASSWORD` and open `/admin` (any username). You can search entries and edit their topic, notes and gear. **Approve** marks an entry as checked; approved entries never expire, and new research never overwrites them. Unreviewed entries are searched again after `TONESEARCH_LIBRARY_DAYS`.
-- **Requests for gear that meets needs** ("a stereo combo for gigging that's a good pedal platform"): the AI lists the requirements first (shown in the brief as **What you asked for**), drops candidates that break a hard one, and rates the rest on the same scale as everything else. When a request states requirements and names no artist, pedals, speakers and guitars are left out unless it asks for them. Web research looks for specifications and reviews instead of an artist's rig.
-- **Also known as:** when the AI plans a search it also lists other names for the same rig (the player and nickname, band, song, album, era), at no extra cost. These are saved with the research and the saved answer, so "Nolly Getgood bass" finds the "Periphery bass" research and answer. Every identity word of the new search must be a known name and at least two must match, so "Periphery" alone or "Nolly bass Juggernaut" (an era it may not cover) don't. A saved brief is only reused when the new search doesn't describe a sound the saved one didn't; the research is still shared. Edit the names on `/admin`; MCP assistants can add them with `save_gear`.
-- **Confidence:** every gear item is rated on one scale for every kind of request. **best** means documented for this recording, album or era, or meeting every requirement. **close** means the artist's gear from another or unknown era, or missing one requirement. **alternative** means a substitute, modern equivalent, different approach or guess. The brief labels each item, TONE3000 searches skip items weaker than the best of their kind, and ranking prefers captures of the best matches. Gear without a level counts as **close**, and older entries' levels (confirmed, artist, suggested) are read as best, close and alternative. On the admin page, write gear lines as `kind | name | role | level`. Aliases are only kept when one of them names something in the request, so a gear recommendation never gains names like "Beatles".
+- **Review:** set `TONESEARCH_ADMIN_PASSWORD` and open `/admin` (any username). Each entry is a card showing its gear, its sources as links (a source the search engine only summarised is marked **Snippet only**), how often it was used and its votes. Filter by status or search, then **Approve** in one click, or **Edit** the topic, other names, gear and sources. Approved entries never expire, and new research never overwrites them. Unreviewed entries are searched again after `TONESEARCH_LIBRARY_DAYS`.
+- **Deleting:** **Delete…** lists what will go before you confirm: the research, the saved answers, plans and rankings of every search that used it (including ones that found it under another name), and the votes on those searches. The next search for that tone starts from scratch.
+- **What research keeps:** pages are read with [trafilatura](https://trafilatura.readthedocs.io/), which drops menus, footers and ads (a simple built-in parser takes over if it's missing). Gear is recognised by its shape, such as a model number ("VH4", "JC-40") or a make's name, so new and obscure gear needs no list. Sentences that qualify a claim ("a modern equivalent", "not confirmed for this recording") are kept, with the sentence that dates the evidence ("recorded in 2006"). Pages that never mention an instrument or gear are skipped, as are video, social, preset and shop sites, and posters' own rigs on forums. Each source stays on its own line with its link, and a source taken from the search engine's summary is marked as such.
+- **Requests for gear that meets needs** ("a stereo combo for gigging that's a good pedal platform"): the AI lists the requirements first (shown in the brief as **What you asked for**), drops candidates that break a hard one, and rates the rest on the same scale as everything else. It is told to leave out pedals, speakers and guitars unless the request asks for them. Web research looks for specifications and reviews instead of an artist's rig, and a request that could be either (such as "AC30") searches one of each. When ranking packs, requirements about the physical box (combo or head, speakers, weight) are ignored: a capture is only the sound.
+- **Also known as:** when the AI plans a search it also lists other names for the same rig (the player and nickname, band, song, album, era), at no extra cost. These are saved with the research and the saved answer, so "Adam Getgood bass" finds the "Periphery bass" research and answer. Each other name is compared on its own, and words from two names are never combined, so "Nolly Getgood bass" doesn't match through "Nolly" and "Adam Getgood". At least two words must match, so "Periphery" alone doesn't, and a search that names more (an album it may not cover) doesn't either. Gear ("Telecaster", "Ibanez TQM2"), sound words, genres, bandmates and labels are not other names and are dropped; a player's own name in their signature gear stays. A saved brief is only reused when the new search doesn't describe a sound the saved one didn't; the research is still shared. Edit the names on `/admin`; MCP assistants can add them with `save_gear`.
+- **Confidence:** every gear item is rated on one scale for every kind of request. **best** means documented for this recording, album or era, or meeting every requirement. **close** means the artist's gear from another or unknown era, or missing one requirement. **alternative** means a substitute, modern equivalent, different approach or guess. The brief labels each item, TONE3000 searches for alternatives come after the others, and ranking prefers captures of the best matches. Uncertain items are kept with a note in their role rather than dropped, and documented modelling rigs (an Axe-Fx or Kemper an artist actually uses) are treated like any other gear. Gear without a level counts as **close**, and older entries' levels (confirmed, artist, suggested) are read as best, close and alternative. On the admin page, write gear lines as `kind | name | role | level`. Other names are only kept when one of them names something in the request, so a gear recommendation never gains names like "Beatles".
 - **Reports:** visitors can press **Report wrong research** under the notes. A reported entry isn't reused until you review it, and it's listed first on the admin page with the reason.
 
 ---
@@ -354,9 +357,21 @@ Only a first search uses saved answers; a refinement depends on the whole conver
 
 - Pack ratings re-order results for that tone: each net vote moves a pack 8 fit points, up to 3 votes either way.
 - A "wrong" brief reports its research (as **Report wrong research** does) and clears that tone's saved answers.
-- Editing or deleting a research library entry on `/admin` also clears that tone's saved answers.
+- Editing a research library entry on `/admin` clears that tone's saved answers. Deleting one also clears the saved answers of every search that used it and the votes on them.
 - `/admin` → **Activity** counts, per day, how many searches were answered from saved answers (directly or by alias) against worked out fresh, and how often research, plans, rankings and TONE3000 searches were reused against done again, for the website and MCP.
-- `/admin` → **Feedback** lists the topics with the most bad briefs, and recent votes with their comments.
+- `/admin` → **Feedback** lists the topics with the most bad briefs, and recent votes with their comments. **Delete** removes a single vote, such as spam, and its effect on pack order.
+
+### Starting fresh
+
+`scripts/reset_data.py` clears saved data. Without `--yes` it only shows what is stored:
+
+```bash
+python3 scripts/reset_data.py                 # row counts; changes nothing
+python3 scripts/reset_data.py --all --yes     # research, saved answers, votes, activity and rate limits
+python3 scripts/reset_data.py --votes --yes   # one part: --library, --answers, --votes, --activity or --limits
+```
+
+It deletes rows, so the app can keep running. Run it with the app's environment (on cPanel, from the app's virtual environment in the app folder) so it finds the same `TONESEARCH_DATA_DIR`. By hand: stop the app, delete `knowledge.sqlite3` and `limits.sqlite3` from the data folder, and start it again; both are recreated empty.
 
 ---
 
@@ -387,7 +402,7 @@ Each value is clamped to the range shown.
 | `NAM_MIXER_AI_TIMEOUT_SECONDS` | 90 | 5–180 | Longest wait with **no progress** from the provider |
 | `NAM_MIXER_AI_HISTORY_MESSAGES` | 8 | 0–12 | Earlier messages sent with a refinement |
 | `NAM_MIXER_AI_HISTORY_MESSAGE_CHARS` | 1200 | 100–4000 | Characters kept per earlier message |
-| `NAM_MIXER_AI_RESEARCH_CHARS` | 5000 | 0–20000 | Web research notes passed to the AI |
+| `NAM_MIXER_AI_RESEARCH_CHARS` | 7000 | 0–20000 | Web research notes passed to the AI (four sources of up to 1,400 characters) |
 | `NAM_MIXER_AI_MAX_REPLY_CHARS` | 1800 | 200–6000 | Longest pack-question answer shown |
 | `NAM_MIXER_AI_MAX_EXPLANATION_CHARS` | 900 | 200–4000 | Longest tone summary shown |
 
@@ -453,7 +468,7 @@ For Ollama, small models such as `gemma4:e4b` work, but give thinner gear lists 
 
 1. In cPanel, open **Setup Python App** and create an app. Use Python 3.10 or newer.
 2. Set the **startup file** to `passenger_wsgi.py` and the **entry point** to `application`.
-3. Upload the repository, then install the requirements from the app's virtual environment: `pip install -r requirements.txt`.
+3. Upload the repository, then install the requirements from the app's virtual environment: `pip install -r requirements.txt`. Upgrade pip first (`pip install --upgrade pip`) so trafilatura's `lxml` installs ready-built instead of compiling.
 4. Add the environment variables from the [Configuration reference](#configuration-reference) in the app's settings.
 5. Restart the app after every upload.
 
@@ -498,7 +513,11 @@ pip install -r requirements-dev.txt
 pytest                                   # all tests
 pytest tests/test_app.py::test_name      # one test
 FLASK_DEBUG=1 python3 app.py             # auto-reload while editing
+python3 scripts/eval_research.py         # web research on real searches; --compare BEFORE.json AFTER.json
+python3 scripts/eval_plans.py            # tone plans from your configured AI on saved research (--refresh)
 ```
+
+The unit tests check what the Python code does to research and plans. The two eval scripts check what the web and the AI actually return, which changes from run to run, so they report rather than pass or fail. Run them before and after changing the research code or the AI prompts. Their results go to `data/eval/`.
 
 **Project layout:**
 
@@ -507,11 +526,17 @@ app.py                  Flask routes, validation, hourly limits, time budget
 passenger_wsgi.py       WSGI entry point for cPanel/Passenger
 tonesearch/ai.py        AI calls: prompts, JSON repair, streaming, thinking hints, deadlines
 tonesearch/research.py  TONE3000 search, file lists and downloads; DuckDuckGo web research
+tonesearch/knowledge.py The research library and its name matching
+tonesearch/cache.py     Saved answers, plans, rankings and activity counts
+tonesearch/feedback.py  Votes on briefs and packs
+tonesearch/mcp_server.py The MCP server (stdio and hosted)
 tonesearch/overrides.py Per-request settings from the visitor's Settings dialog (headers)
 templates/index.html    The single page
+templates/admin.html    The owner's review pages
 static/app.js           Front end (no build step)
 static/style.css        Styles (light and dark)
-tests/test_app.py       Tests; they never touch the network
+tests/                  Tests; they never touch the network
+scripts/                Eval scripts, their saved research notes, and reset_data.py
 ```
 
 **Conventions:**
@@ -533,7 +558,8 @@ tests/test_app.py       Tests; they never touch the network
 | Connection refused with local AI | Check the port: Ollama's default is `11434`. `curl http://127.0.0.1:11434/v1/models` should list your models. |
 | `ollama ps` stays empty during a search | The app isn't reaching Ollama. Check the base URL and model name. If the page itself doesn't load, see the next row. |
 | The local server stops responding (even the home page) | Older versions could freeze during web research on macOS (a bug in the `ddgs` search library's HTTP client). Update to the latest code, then stop the frozen server with `kill -9 <pid>` (Ctrl+C can't stop it) and start it again. |
-| "Web research unavailable" | Install the requirements (`ddgs`). DuckDuckGo may also be rate-limiting; searches still work without research. |
+| "Web research unavailable" | Install the requirements (`ddgs`, `trafilatura`). DuckDuckGo may also be rate-limiting; searches still work without research. |
+| Research notes look like menus or page clutter | trafilatura isn't installed, so the simple parser is reading pages: run `pip install -r requirements.txt` and restart. The log says "trafilatura is not installed" once when this happens. |
 | Changes don't show after deploying | Restart the app, then hard-refresh (Cmd/Ctrl+Shift+R). |
 
 ---

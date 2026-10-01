@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import ipaddress
 import json
+import logging
 import os
 import re
 import socket
@@ -75,35 +76,55 @@ def _rank_tone3000_metadata(query: str, result: dict) -> tuple[int, str]:
     return score, reason + "."
 
 
+def _page_title(html: str) -> str:
+    """Best-effort HTML <title> for topic detection; Trafilatura handles the actual page content."""
+    match = re.search(r"<title\b[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    title = re.sub(r"<[^>]+>", " ", match.group(1))
+    return re.sub(r"\s+", " ", title).strip()
+
+
 class _PageText(HTMLParser):
-    """Extract readable page text without executing or trusting page markup.
+    """Extract readable page text without executing or trusting page markup: the fallback when trafilatura is
+    missing, fails or finds no main text (it skips short pages).
 
     Page chrome (navigation, headers, footers, forms) is dropped, and block elements end a line,
     so menus never run together into one long fake "sentence".
     """
 
     IGNORED = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button", "select", "menu", "template"}
-    BLOCKS = {"p", "li", "div", "section", "article", "br", "tr", "td", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "dd", "dt"}
+    # The title says what the page is about (see `title`), but it is not evidence: it is kept out of `parts`.
+    BLOCKS = {"p", "li", "div", "section", "article", "br", "tr", "td", "h1", "h2", "h3", "h4", "h5", "h6",
+              "blockquote", "dd", "dt"}
 
     def __init__(self):
         super().__init__()
         self.parts: list[str] = []
+        self.title = ""
         self._ignored = 0
+        self._in_title = False
 
     def handle_starttag(self, tag, attrs):
-        if tag in self.IGNORED:
+        if tag == "title":
+            self._in_title = True
+        elif tag in self.IGNORED:
             self._ignored += 1
         elif tag in self.BLOCKS:
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
-        if tag in self.IGNORED and self._ignored:
+        if tag == "title":
+            self._in_title = False
+        elif tag in self.IGNORED and self._ignored:
             self._ignored -= 1
         elif tag in self.BLOCKS:
             self.parts.append("\n")
 
     def handle_data(self, data):
-        if not self._ignored:
+        if self._in_title:
+            self.title += data
+        elif not self._ignored:
             self.parts.append(data)
 
 
@@ -147,24 +168,54 @@ def _is_safe_public_host(hostname: str) -> bool:
 
 
 # Words that make a research sentence about the actual rig rather than about the web page.
+# Generic equipment words. Makes and models are recognised by their shape instead (_MODEL, _names), so research
+# works for gear nobody has listed here: "a Zorblax QX-57 amplifier" is evidence without "Zorblax" in Python.
 _GEAR_WORDS = {
-    "amp", "amps", "amplifier", "amplifiers", "head", "combo", "cabinet", "cab", "speaker", "speakers", "celestion",
-    "jensen", "marshall", "fender", "vox", "mesa", "boogie", "hiwatt", "orange", "peavey", "ampeg", "dumble", "plexi",
-    "twin", "deluxe", "champ", "bassman", "princeton", "stratocaster", "strat", "telecaster", "tele", "gibson",
-    "sg", "explorer", "flying", "humbucker", "humbuckers", "pickup", "pickups", "p90", "pedal", "pedals", "fuzz",
-    "overdrive", "distortion", "wah", "screamer", "rangemaster", "booster", "univibe", "leslie", "reverb",
-    "tremolo", "echo", "delay", "echoplex", "valve", "tube", "tubes", "rectifier", "jcm800", "soldano", "engl",
-    "bogner", "friedman", "laney", "matchless", "muff", "klon", "prs", "ibanez", "schecter", "compressor", "chorus",
-    "flanger", "phaser", "darkglass", "sansamp", "svt", "preamp", "bass", "di",
+    "amp", "amps", "amplifier", "amplifiers", "combo", "cab", "cabinet", "speaker", "speakers", "pickup", "pickups",
+    "humbucker", "humbuckers", "pedal", "pedals", "stompbox", "bass", "preamp", "gear",
+    "fuzz", "overdrive", "distortion", "boost", "booster", "delay", "echo", "reverb", "chorus", "phaser", "flanger",
+    "tremolo", "vibrato", "wah", "compressor", "octave", "valve", "valves", "tube", "tubes", "modeler", "modeller",
+    # and the words of a spec sheet
+    "effects", "loop", "watt", "watts", "stereo", "mono", "headroom",
 }
-# Words that ask for gear meeting needs rather than an artist's tone; two or more change what research looks for.
-_NEEDS = re.compile(r"\b(best|recommend\w*|looking for|suggest\w*|which|gigg?ing|gigs?|stereo|headroom|watts?|combo|"
-                    r"budget|cheap|affordable|under [£$€]?\d+|lightweight|portable|pedal platform|practice|home use|"
-                    r"bedroom|loud enough|small venues?)\b", re.IGNORECASE)
+# Not "guitar" ("Tom Quayle took up the guitar at 15"), "head" ("head to this page") or "channel" ("YouTube channel"):
+# too common outside gear talk to show a sentence is about gear.
+# Every request is about instruments, gear or peripherals, so a page must mention one of these somewhere to be
+# evidence: "AC30" also finds a Panasonic AG-AC30 camcorder, and song titles find lyrics pages. Words that other
+# products use too ("stereo", "audio", "chorus", "keyboard", "instrument") are left out on purpose.
+_MUSIC_WORDS = {
+    "guitar", "guitars", "guitarist", "guitarists", "bass", "basses", "bassist", "bassists", "amp", "amps",
+    "amplifier", "amplifiers", "combo", "pedal", "pedals", "pedalboard", "stompbox", "pickup", "pickups", "humbucker",
+    "humbuckers", "cab", "cabinet", "preamp", "fuzz", "overdrive", "distortion", "reverb", "tremolo", "wah", "synth",
+    "synthesizer", "synthesiser", "drums", "drummer", "piano", "musician", "musicians", "frets", "fretboard",
+}
+
+
+_PLAYING = {"played", "plays", "playing", "plugged", "tracked", "strummed"}
+
+
+def _about_music(*texts: str, short: bool = False) -> bool:
+    """True when the text mentions an instrument or gear; a short snippet may instead say someone played it."""
+    words = set(re.findall(r"[a-z]+", " ".join(texts).lower()))
+    return bool(words & _MUSIC_WORDS or (short and words & _PLAYING))
+
+
+# A model-like token mixes letters and digits ("VH4", "JC-40", "AC30", "DS-1", "2x10", "40W"), but decades ("1970s")
+# and ordinals ("2nd") don't count...
+_MODEL = re.compile(r"(?<![\w-])(?=[\w-]*\d)(?=[\w-]*[a-z])[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])", re.IGNORECASE)
+_NOT_MODEL = re.compile(r"^\d+(s|st|nd|rd|th|x)$|\d[A-Z]?[a-z]{3,}|^[A-G](#|b)?(m|maj|min|sus|add|dim|aug)\d*$")
+# ...and not chords ("Gadd9", "Am7") or chord charts that run into lyrics ("Gadd9fail").
+# A spec or rig-list line: "Amplifier: Diezel VH4", "JC-40: 40W stereo 2x10 combo".
+_LABEL = re.compile(r"^[A-Z][\w /&()-]{0,30}:\s+\S")
+# Words that say gear was actually used rather than just discussed ("recorded through", "plugged into").
+_USE_WORDS = {"used", "uses", "using", "played", "plays", "recorded", "recording", "tracked", "plugged", "runs", "ran",
+              "paired", "equipped", "fitted", "studio", "session", "sessions", "rig", "cranked", "designed", "developed"}
+# A hint for what to search, not an intent classifier: two or more of these ask for gear meeting needs (search
+# specs and reviews), one makes the request ambiguous (search one of each), none means a player's or a song's rig.
+_NEEDS = re.compile(r"\b(best|recommend\w*|suggest\w*|gigg?ing|gigs?|stereo|headroom|watts?|combo|budget|cheap|"
+                    r"affordable|under [£$€]?\d+|lightweight|portable|pedal platform|practice|home use|bedroom|"
+                    r"loud enough|small venues?)\b", re.IGNORECASE)
 _BASS = re.compile(r"\bbass(ist|ists)?\b", re.IGNORECASE)
-_GEAR_PHRASES = ("les paul", "bad cat", "pro co rat", "big muff", "tube screamer", "dual rectifier")
-# Words that support gear evidence but don't name any equipment ("recorded in the studio").
-_CONTEXT_WORDS = {"recorded", "recording", "studio", "session", "played", "plugged", "used", "cranked", "gain", "rig"}
 _FILLER_WORDS = {
     "i", "im", "i'm", "id", "i'd", "would", "like", "want", "wanted", "need", "looking", "look", "for", "find",
     "a", "an", "the", "tone", "tones", "sound", "sounds", "sounding", "that", "which", "to", "of", "on", "in",
@@ -172,13 +223,23 @@ _FILLER_WORDS = {
     "similar", "please", "me", "my", "some", "is", "was", "be", "it", "and", "or", "he", "she", "they", "their",
     "his", "her", "what", "how", "can", "you", "just", "really", "exact", "exactly", "same", "as", "at", "by",
 }
-# Social, video and preset-sharing sites rarely say what the artist actually used.
-_SKIP_HOSTS = ("tiktok.com", "youtube.com", "youtu.be", "instagram.com", "facebook.com", "pinterest.", "twitter.com",
-               "x.com", "tone.fender.com", "line6.com", "spotify.com", "apple.com", "amazon.", "ebay.", "reverb.com",
-               # Shops and classifieds list gear for sale, never what an artist used.
-               "gumtree.", "craigslist.", "preloved.", "for-sale.", "gear4music.", "thomann.", "sweetwater.com",
-               "guitarcenter.com", "musiciansfriend.com", "andertons.co.uk", "bassbros.co.uk", "pmtonline.co.uk",
-               "dv247.", "zzounds.com", "kijiji.", "marktplaats.", "olx.", "etsy.com", "walmart.com")
+# Sources are skipped for three different reasons, kept apart so each can be reviewed on its own terms.
+# Unreadable: video, social and streaming pages need a browser or a login, so extraction finds nothing there.
+_UNREADABLE_HOSTS = ("tiktok.com", "youtube.com", "youtu.be", "instagram.com", "facebook.com", "pinterest.",
+                     "twitter.com", "x.com", "spotify.com", "apple.com")
+# Low value: preset-sharing pages for a maker's own modellers give settings to recreate a sound, never what an
+# artist used. (Line 6's product pages are kept: only its CustomTone presets are skipped, by path.)
+_PRESET_HOSTS = ("tone.fender.com",)
+_PRESET_PATH = re.compile(r"/customtone\b", re.IGNORECASE)
+# Commercial noise: shops, marketplaces and classifieds list gear for sale.
+_SHOP_HOSTS = ("amazon.", "ebay.", "reverb.com", "gumtree.", "craigslist.", "preloved.", "for-sale.", "gear4music.",
+               "thomann.", "sweetwater.com", "guitarcenter.com", "musiciansfriend.com", "andertons.co.uk",
+               "bassbros.co.uk", "pmtonline.co.uk", "dv247.", "zzounds.com", "kijiji.", "marktplaats.", "olx.",
+               "etsy.com", "walmart.com")
+_SKIP_HOSTS = _UNREADABLE_HOSTS + _PRESET_HOSTS + _SHOP_HOSTS
+# Bass forums, skipped only for requests that don't mention bass: a guitar amp request found a bass-amp thread and
+# the AI suggested a bass head and a bass cab.
+_BASS_SITES = ("talkbass.com", "basschat.co.uk")
 # Listing pages on any site: "/for-sale/", "/shop/", "/classifieds/". Not "/products/": makers' spec pages
 # (roland.com/global/products/jc-40/) live there, and known shops are skipped by host instead.
 _LISTING_PATH = re.compile(r"/(for-?sale|shop|store|classifieds?|buy|cart|category|categories|listings?)(/|$|\?|-)",
@@ -188,15 +249,32 @@ _LISTING_PATH = re.compile(r"/(for-?sale|shop|store|classifieds?|buy|cart|catego
 _NOT_TOPIC = {"bass", "guitar", "guitars", "amp", "amps", "tone", "tones", "sound", "sounds", "rig", "gear",
               "pedal", "pedals", "solo", "riff", "live", "studio", "album", "song", "band", "the", "and"}
 MAX_SOURCES = 4
-EVIDENCE_CHARS = 1_000  # per source: 4 sources and their titles and links stay under the AI's 5,000-character research limit
-EVIDENCE_SENTENCES = 5
+EVIDENCE_CHARS = 1_400  # coherent local context per source; raise AI RESEARCH_CHARS to about 7,000 alongside this
+EVIDENCE_BLOCKS = 3
+MAX_EXTRACTED_CHARS = 120_000  # bound Trafilatura output before relevance scoring
 _REFERS_BACK = re.compile(r"(he|she|they|their|his|her|it|its|this|these|that|those|both)\b", re.IGNORECASE)
 
 
 def _topic(query: str) -> str:
-    """The artist/song/gear words of a request, without conversational filler."""
+    """The artist/song/gear words of a request, without conversational filler. The library and saved answers are
+    keyed on these words (knowledge.topic_words), so changing this changes which saved work a request finds."""
     words = re.findall(r"[\w'’.-]+", query)
     kept = [w for w in words if w.lower().strip(".'’") not in _FILLER_WORDS]
+    return " ".join(kept) or query.strip()
+
+
+def _search_words(query: str) -> str:
+    """The request as a web search: like _topic, but short requests ("Tom Quayle", "Knights of Cydonia") stay whole,
+    as do small words inside a capitalised name ("Knights of Cydonia by Muse"), which search engines match better."""
+    words = re.findall(r"[\w'’.-]+", query)
+    if len(words) <= 3:
+        return " ".join(words) or query.strip()
+    kept = []
+    for i, word in enumerate(words):
+        inside_name = (0 < i < len(words) - 1 and word.islower()
+                       and words[i - 1][:1].isupper() and words[i + 1][:1].isupper())
+        if inside_name or word.lower().strip(".'’") not in _FILLER_WORDS:
+            kept.append(word)
     return " ".join(kept) or query.strip()
 
 
@@ -208,43 +286,85 @@ def _topic_words(topic: str) -> set:
 def _skip_source(href: str) -> bool:
     parsed = urlparse(href)
     host = (parsed.hostname or "").lower()
-    if _LISTING_PATH.search(parsed.path):
+    if _LISTING_PATH.search(parsed.path) or _PRESET_PATH.search(parsed.path):
         return True
     return not host or any(host == pattern or host.endswith("." + pattern) or (pattern.endswith(".") and pattern in host)
                            for pattern in _SKIP_HOSTS)
 
 
-_QUALIFIER = re.compile(r"modern equivalent|replica|recreat|reissue|stand-?in|substitut|our (catalog|catalogue)|"
-                        r"\bonly (two|three|\d+) (songs|tracks|tones)\b|not (confirmed|known|documented)|unconfirmed|"
-                        r"\bunknown\b|\blater\b (era|years|tours?)|\bera\b", re.IGNORECASE)
+# Sentences that change what nearby evidence means. These score highly on their own: without them the AI takes a
+# site's suggestions and later-era gear as what was used on the record.
+_QUALIFIER = re.compile(r"modern equivalent|replica|recreat|reissue|stand-?in|substitut|instead of|our (catalog|catalogue)|"
+                        r"\bonly (two|three|\d+) (songs|tracks|tones)\b|not (confirmed|known|documented|the original)|"
+                        r"unconfirmed|\bunknown\b|\bunclear\b|\blater\b (era|years|tours?)|\bera\b", re.IGNORECASE)
+# Weaker hedges and dates: kept when they sit next to chosen evidence, not chosen for themselves.
+_HEDGE = re.compile(r"\b(likely|probably|possibly|reportedly|rumou?red|later|introduced|currently|unclear)\b", re.IGNORECASE)
+_DATES = re.compile(r"\b(19[4-9]\d|20[0-4]\d)\b|\b(recorded|released|tracked) (in|at|during)\b", re.IGNORECASE)
 
 
-def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False) -> int:
-    """0 for menus and boilerplate; otherwise topic hits (weighted) plus distinct gear words."""
+_CATEGORY_WORDS = _GEAR_WORDS | _MUSIC_WORDS | {"microphone", "microphones", "instrument", "instruments", "effect",
+                                                 "accessories"}
+
+
+def _names(sentence: str, topic_words: set) -> int:
+    """Runs of capitalised words after the first word ("Diezel", "Bad Cat Hot Cat"), other than the topic's own and
+    capitalised categories ("Guitars, Amplifiers, Effects Pedals" in a site's menu copy)."""
+    runs, current = 0, []
+    for word in re.findall(r"[A-Za-z][\w'’-]*", sentence)[1:] + [""]:
+        if word[:1].isupper() and word not in ("I", "I'm", "I've"):
+            current.append(word.lower())
+            continue
+        if current and not set(current) <= topic_words | _CATEGORY_WORDS:
+            runs += 1
+        current = []
+    return runs
+
+
+def _specific(sentence: str, topic_words: set) -> bool:
+    """A model, a name other than the topic's, or a sign gear was used: more than generic gear words."""
+    return bool(any(not _NOT_MODEL.search(m) for m in _MODEL.findall(sentence)) or _names(sentence, topic_words)
+                or set(re.findall(r"[a-z']+", sentence.lower())) & _USE_WORDS)
+
+
+def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False, *, thread_on_topic: bool = False) -> int:
+    """0 for menus and boilerplate; otherwise how much the sentence says about the topic's gear.
+
+    Gear is recognised by shape, not by a list of makes: generic equipment words, model-like tokens ("VH4") and
+    capitalised names. A sentence needs the topic, unless the page is about the topic (a maker's spec page or rig
+    rundown) and it names gear twice, or it is on a forum thread about the topic and says someone used the gear.
+    """
     words = re.findall(r"[a-z0-9']+", sentence.lower())
-    if len(words) < 7 or len(sentence) > 450:
+    models = {m.lower() for m in _MODEL.findall(sentence) if not _NOT_MODEL.search(m)}
+    spec_line = bool(_LABEL.match(sentence)) and len(words) <= 12
+    if len(words) < (3 if models or spec_line else 7) or len(sentence) > 450:
         return 0
+    if sentence[-1:] not in ".!?\"”)" and not (models or spec_line):
+        return 0  # a cut-off fragment; spec lines ("Amplifier: Diezel VH4") often have no full stop
     if sentence.rstrip("\"”)").endswith("?"):
         return 0  # a question ("Does anyone know the gear...?") is not evidence
-    if {"you", "your", "you're", "yours"} & set(words):
-        return 0  # sales copy aimed at the reader ("adapt it to your rig"), not what the artist used
+    if {"you", "your", "you're", "yours"} & set(words) and not (page_on_topic and models):
+        return 0  # sales copy aimed at the reader ("adapt it to your rig"); a spec page's "gives you 40W" still counts
     if "→" in sentence or "»" in sentence or sentence.count("·") >= 2 or sentence.count("|") >= 2:
         return 0  # "related links" strips: arrows and dot/pipe separators
     capitalised = sum(1 for w in re.findall(r"[A-Za-z][\w']*", sentence) if w[0].isupper())
-    if capitalised > len(words) * 0.5:  # Title Case runs are menus, headings and tag lists
+    if capitalised > len(words) * 0.5 and not spec_line:  # Title Case runs are menus, headings and tag lists
         return 0
-    gear = len(set(words) & _GEAR_WORDS) + sum(phrase in sentence.lower() for phrase in _GEAR_PHRASES)
     topic = len(set(words) & topic_words)
+    gear = len(set(words) & _GEAR_WORDS) + len(models) + bool(re.search(r"\bDI\b", sentence))  # not Italian "di"
+    names = _names(sentence, topic_words)
+    used = len(set(words) & _USE_WORDS)
     if _QUALIFIER.search(sentence) and (topic or page_on_topic):
-        # "A modern equivalent", "our catalogue only has two songs": without these the AI takes a site's
-        # suggestions and later-era gear as what was used on the record.
         return 6 + topic * 2 + gear
-    # A product page lists gear without the artist and an album intro names the artist without gear, so a
-    # sentence needs both, unless the page is about the topic and the sentence names gear twice ("their go-to
-    # gear: a Dual Rectifier and a Bad Cat").
-    if not gear or not (topic or (page_on_topic and gear >= 2)):
-        return 0
-    return topic * 2 + gear + len(set(words) & _CONTEXT_WORDS)
+    if topic:
+        # An album intro names the artist without gear; a name only counts as gear when something was used.
+        enough = gear or (names and used)
+    elif page_on_topic or (thread_on_topic and used):
+        # "Their go-to gear: a Mesa Dual Rectifier and a Bad Cat", "JC-40: 40W stereo 2x10 combo". Names alone are
+        # not enough: lyrics, album credits and band histories are full of them.
+        enough = gear and gear + names >= 2
+    else:
+        enough = False
+    return topic * 2 + min(gear, 4) + min(names, 2) + used if enough else 0
 
 
 # Forum threads about an artist are mostly members describing their own rigs ("my SVT into an 8x10"), so on a
@@ -260,39 +380,191 @@ def _is_forum(href: str) -> bool:
     return bool(_FORUM.search((parsed.hostname or "").lower()) or _FORUM.search(parsed.path))
 
 
-def _extract_evidence(html: str, topic: str, forum: bool = False) -> str:
-    """The best few sentences of a page about the requested rig, in page order."""
+_TRAFILATURA = None  # trafilatura.extract once loaded, False when it isn't installed
+
+
+def _trafilatura():
+    """trafilatura's extract function, or None when the package is missing (research then uses _PageText).
+
+    Imported on first use, like ddgs, so a server without it still starts and serves everything else."""
+    global _TRAFILATURA
+    if _TRAFILATURA is None:
+        try:
+            from trafilatura import extract
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "trafilatura is not installed: web research uses the basic page parser (pip install -r requirements.txt)")
+            extract = False
+        _TRAFILATURA = extract
+    return _TRAFILATURA or None
+
+
+def _main_text(html: str, url: str = "", forum: bool = False) -> tuple[str, str]:
+    """The page's main text, one block per line, and which extractor produced it ("trafilatura" or "parser")."""
+    extract = _trafilatura()
+    if extract:
+        try:
+            # Forum posts are what trafilatura calls comments: on a thread, the replies are the evidence.
+            text = extract(html, url=url or None, output_format="txt", include_comments=forum, include_tables=True,
+                           include_links=False, favor_recall=True) or ""
+        except Exception:  # one odd page must not stop the research
+            text = ""
+        if text.strip():
+            return text[:MAX_EXTRACTED_CHARS], "trafilatura"
     parser = _PageText()
     parser.feed(html)
+    return "".join(parser.parts)[:MAX_EXTRACTED_CHARS], "parser"
+
+
+def _split_sentences(block: str) -> list[str]:
+    """Sentence-ish pieces for scoring only; returned evidence stays as coherent blocks."""
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", block) if part.strip()]
+    return parts or ([block.strip()] if block.strip() else [])
+
+
+def _content_blocks(text: str) -> list[str]:
+    """Useful paragraph/list/spec blocks from the page's main text.
+
+    We keep the extractor's line/paragraph boundaries instead of flattening the page into unrelated sentences.
+    Sentences already seen are dropped, also inside a block (pages repeat a summary box; trafilatura repeats a
+    forum reply it reads as both post and comment). Very long lines are broken into sentence windows so one giant
+    block cannot consume the whole evidence budget.
+    """
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"\n+", text):
+        block = re.sub(r"\s+", " ", raw).strip(" \t-*•")
+        sentences = []
+        for sentence in _split_sentences(block):
+            if sentence.lower() not in seen:
+                seen.add(sentence.lower())
+                sentences.append(sentence)
+        if not sentences:
+            continue
+        block = " ".join(sentences)
+        if len(block) <= 900:
+            blocks.append(block)
+            continue
+        chunk = ""
+        for sentence in sentences:
+            candidate = f"{chunk} {sentence}".strip()
+            if chunk and len(candidate) > 700:
+                blocks.append(chunk)
+                chunk = sentence
+            else:
+                chunk = candidate
+        if chunk:
+            blocks.append(chunk)
+    return blocks
+
+
+def _scores(block: str, topic_words: set, page_on_topic: bool, thread_on_topic: bool, forum: bool) -> list[tuple[str, int]]:
+    """Each sentence of a block with its score; on forums a poster's own rig scores 0."""
+    return [(sentence, 0 if forum and _OWN_RIG.search(sentence) else
+             _sentence_score(sentence, topic_words, page_on_topic, thread_on_topic=thread_on_topic))
+            for sentence in _split_sentences(block)]
+
+
+def _block_score(block: str, topic_words: set, page_on_topic: bool, *, thread_on_topic: bool = False,
+                 forum: bool = False) -> int:
+    """Relevance of one coherent content block, using sentence scores as signals rather than output units."""
+    useful = sorted((score for _, score in _scores(block, topic_words, page_on_topic, thread_on_topic, forum) if score),
+                    reverse=True)
+    if not useful and not (forum and _OWN_RIG.search(block)):
+        # Short structured lines can contain several specs separated by punctuation the extractor normalises away.
+        direct = _sentence_score(block, topic_words, page_on_topic, thread_on_topic=thread_on_topic)
+        useful = [direct] if direct else []
+    if not useful:
+        return 0
+    score = useful[0] + sum(useful[1:3]) // 2
+    if _QUALIFIER.search(block):
+        score += 3
+    if _DATES.search(block):
+        score += 1
+    return score
+
+
+def _evidence_part(block: str, topic_words: set, page_on_topic: bool, thread_on_topic: bool, forum: bool) -> str:
+    """The part of a chosen block worth quoting: its scoring sentences and those they depend on (who "he" is, a
+    date before, a hedge after). Trafilatura can merge paragraphs, newsletter sign-ups and all, into one block."""
+    scored = _scores(block, topic_words, page_on_topic, thread_on_topic, forum)
+    sentences = [sentence for sentence, _ in scored]
+    keep = {i for i, (_, score) in enumerate(scored) if score}
+    if len(sentences) <= 1 or not keep:
+        return block  # a single line, or a spec line that only scores as a whole
+    for i in list(keep):
+        if i > 0 and (_REFERS_BACK.match(sentences[i]) or _DATES.search(sentences[i - 1])):
+            keep.add(i - 1)
+        if i + 1 < len(sentences) and (_QUALIFIER.search(sentences[i + 1]) or _HEDGE.search(sentences[i + 1])):
+            keep.add(i + 1)
+    return " ".join(sentences[i] for i in sorted(keep) if not (forum and _OWN_RIG.search(sentences[i])))
+
+
+def _context_part(block: str, forum: bool, *, before: bool) -> str:
+    """From a neighbouring block, only what dates, qualifies or hedges the evidence; before it, else the sentence
+    a "he" refers back to."""
+    sentences = [s for s in _split_sentences(block) if not (forum and _OWN_RIG.search(s))]
+    picked = [s for s in sentences if _DATES.search(s) or _QUALIFIER.search(s) or _HEDGE.search(s)]
+    return " ".join(picked or (sentences[-1:] if before else []))
+
+
+def _block_context(index: int, blocks: list[str], forum: bool) -> list[int]:
+    """Neighbouring blocks that materially qualify or identify a selected block."""
+    chosen: list[int] = []
+    if index > 0:
+        previous = blocks[index - 1]
+        if not (forum and _OWN_RIG.search(previous)) and (
+            _DATES.search(previous) or _QUALIFIER.search(previous) or _REFERS_BACK.match(blocks[index])
+        ):
+            chosen.append(index - 1)
+    if index + 1 < len(blocks):
+        following = blocks[index + 1]
+        if not (forum and _OWN_RIG.search(following)) and (
+            _QUALIFIER.search(following) or _HEDGE.search(following) or _DATES.search(following)
+        ):
+            chosen.append(index + 1)
+    return chosen
+
+
+def _extract_evidence(html: str, topic: str, forum: bool = False, url: str = "") -> str:
+    """A few coherent, relevant passages of a page, on one line (research notes are one line per source).
+
+    trafilatura decides what is main-page content (_main_text). This function only decides which local passages
+    are useful for this request; the AI planner still decides what the evidence means.
+    """
+    text, _ = _main_text(html, url, forum)
+    if not text.strip() or not _about_music(_page_title(html), text):
+        return ""
     topic_words = _topic_words(topic)
-    text = "".join(parser.parts)
-    opening = set(re.findall(r"[a-z0-9']+", text[:3000].lower()))  # title and first lines say what a page is about
-    page_on_topic = not forum and len(opening & topic_words) >= min(2, len(topic_words))
-    sentences, scores, seen = [], [], set()  # every sentence in page order, with its evidence score
-    for block in text.split("\n"):
-        block = re.sub(r"\s+", " ", block).strip()
-        for sentence in re.split(r"(?<=[.!?])\s+", block):
-            sentence = sentence.strip()
-            if not sentence or sentence.lower() in seen:  # pages often repeat a line (summary box + body)
-                continue
-            seen.add(sentence.lower())
-            score = 0
-            if not (forum and _OWN_RIG.search(sentence)) and sentence[-1:] in ".!?\"”)":
-                score = _sentence_score(sentence, topic_words, page_on_topic)
-            sentences.append(sentence)
-            scores.append(score)
-    best = sorted(sorted(((s, -i) for i, s in enumerate(scores) if s), reverse=True)[:EVIDENCE_SENTENCES])
-    chosen = {-i for _, i in best}
-    for i in list(chosen):
-        # "He used a Bad Cat" means nothing without the sentence that says who he is.
-        if i > 0 and _REFERS_BACK.match(sentences[i]):
-            chosen.add(i - 1)
-    extract = ""
-    for i in sorted(chosen):
-        if len(extract) + len(sentences[i]) + 1 > EVIDENCE_CHARS:
-            break  # whole sentences only
-        extract = f"{extract} {sentences[i]}".strip()
-    return extract
+    opening = set(re.findall(r"[a-z0-9']+", (_page_title(html) + " " + text[:3000]).lower()))
+    on_topic = len(opening & topic_words) >= min(2, len(topic_words))
+    page_on_topic, thread_on_topic = on_topic and not forum, forum and on_topic
+    blocks = _content_blocks(text)
+    scored = [(score, i) for i, block in enumerate(blocks)
+              if (score := _block_score(block, topic_words, page_on_topic, thread_on_topic=thread_on_topic, forum=forum))]
+
+    # Strongest passages first, returned in document order. A selected block may bring the date or qualifier from a
+    # neighbouring block with it. This preserves local meaning without feeding whole articles to the model.
+    parts: dict[int, str] = {}
+
+    def size(extra: dict) -> int:
+        return sum(len(part) + 1 for part in {**parts, **extra}.values())
+
+    taken = 0
+    for _, index in sorted(scored, key=lambda item: (item[0], -item[1]), reverse=True)[: EVIDENCE_BLOCKS * 2]:
+        core = {index: _evidence_part(blocks[index], topic_words, page_on_topic, thread_on_topic, forum)}
+        context = {j: part for j in _block_context(index, blocks, forum) if j not in parts
+                   and (part := _context_part(blocks[j], forum, before=j < index))}
+        if size({**context, **core}) <= EVIDENCE_CHARS:
+            parts.update({**context, **core})
+        elif size(core) <= EVIDENCE_CHARS:
+            parts.update(core)  # keep the evidence even when its context doesn't fit
+        else:
+            continue
+        taken += 1
+        if taken >= EVIDENCE_BLOCKS:
+            break
+    return " ".join(parts[i] for i in sorted(parts))
 
 
 def _page_evidence(href: str, topic: str) -> str:
@@ -309,7 +581,7 @@ def _page_evidence(href: str, topic: str) -> str:
             html = response.read(750_000).decode("utf-8", errors="ignore")
     except Exception:
         return ""
-    return _extract_evidence(html, topic, forum=_is_forum(href))
+    return _extract_evidence(html, topic, forum=_is_forum(href), url=href)
 
 
 # ddgs's native HTTP client (primp) can block forever while holding Python's GIL: on macOS, two searches in
@@ -389,11 +661,20 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     deadline = time.monotonic() + RESEARCH_SEARCH_SECONDS
     # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
     # unrelated shops; these two found forums, interviews and gear write-ups instead.
-    if len(_NEEDS.findall(query)) >= 2:  # "a stereo combo for gigging": product specs, not an artist's rig
-        queries = (f"{topic} specifications", f"{topic} review")
+    bass = bool(_BASS.search(query))
+    player = "bassist bass" if bass else "guitarist"  # a bass request must not find guitar rigs
+    words = _search_words(query)
+    instrument = " bass" if bass else ""  # not " guitar": "...pedal platform gigging guitar" found only pedalboards
+    rig, specs = f"{words} {player} amp pedals gear used", f"{words}{instrument} specifications"
+    needs = len(_NEEDS.findall(query))
+    if needs >= 2:  # "a stereo combo for gigging": what products do, not whose rig
+        queries = (specs, f"{words}{instrument} review")
+    elif needs or any(not _NOT_MODEL.search(m) for m in _MODEL.findall(query)):  # "AC30": a rig or a product
+        # "AC30 specifications" alone found a Panasonic AG-AC30 camcorder; "guitar" is safe here, unlike in the
+        # needs search above.
+        queries = (rig, f"{words}{instrument or ' guitar'} specifications")
     else:
-        player = "bassist bass" if _BASS.search(query) else "guitarist"  # a bass request must not find guitar rigs
-        queries = (f"{topic} {player} amp pedals gear used", f"{topic} {player} interview amplifier gear")
+        queries = (rig, f"{words} {player} interview amplifier gear")
     with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
         outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
     if not any(found for found, _ in outcomes):
@@ -404,7 +685,8 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
             href = str(result.get("href", "")).strip()
             host = (urlparse(href).hostname or "").lower().removeprefix("www.")
             # One page per site: otherwise one tone-settings site can fill every note.
-            if href and href not in seen and host not in hosts and not _skip_source(href):
+            bass_site = any(host == site or host.endswith("." + site) for site in _BASS_SITES)
+            if href and href not in seen and host not in hosts and not _skip_source(href) and (bass or not bass_site):
                 seen.add(href)
                 hosts.add(host)
                 results.append(result)
@@ -422,7 +704,15 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     for result, extract in zip(candidates, extracts):
         title = str(result.get("title", "")).strip()
         snippet = re.sub(r"\s+", " ", str(result.get("body", ""))).strip()
-        text = extract or (snippet if _sentence_score(snippet if snippet[-1:] in ".!?" else snippet + ".", topic_words) else "")
+        snippet = re.sub(r"^[^·]{1,30}·\s*", "", snippet)  # the engine's date stamp: "1 day ago · ", "Jul 21, 2026 · "
+        extract = re.sub(r"\s+", " ", extract or "").strip()  # one line per source: the AI and the page split on lines
+        # A snippet is often a site's own blurb ("a community-built gear list for Gavin Rossdale"), so one of its
+        # sentences must name something specific, not just gear words.
+        if not extract and _about_music(title, snippet, short=True) and any(
+                _sentence_score(part if part[-1:] in ".!?" else part + ".", topic_words) and _specific(part, topic_words)
+                for part in _split_sentences(snippet)):
+            extract = f"Search snippet only: {snippet}"  # the page itself couldn't be read: weaker evidence
+        text = extract
         if text:
             notes.append(f"- {title[:120]}: {text[:EVIDENCE_CHARS]} ({result['href']})")  # URL last and intact
         if len(notes) == MAX_SOURCES:

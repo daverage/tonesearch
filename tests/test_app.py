@@ -233,14 +233,14 @@ def test_pack_models_follow_every_page(monkeypatch):
     assert requested == [1, 2] and len(models) == 307
 
 
-def test_plan_drops_practice_amps_unless_asked(monkeypatch):
+def test_plan_keeps_documented_modellers(monkeypatch):
     monkeypatch.setattr(ai, "config", lambda: ai.AiConfig("custom", "https://x/v1", "m", "k"))
-    content = json.dumps({"summary": "s", "advice": [], "search_queries": ["Mesa Boogie Trem-O-Verb", "Fender Mustang LT25"],
-                          "gear": [{"kind": "amp", "name": "Mesa Boogie Trem-O-Verb"}, {"kind": "amp", "name": "Fender Mustang LT25"}]})
-    reply = lambda req, timeout: _Response({"choices": [{"message": {"content": content}}]})
-    plan = ai.plan_tone("radiohead creep", opener=reply)
-    assert [g["name"] for g in plan["gear"]] == ["Mesa Boogie Trem-O-Verb"] and plan["search_queries"] == ["Mesa Boogie Trem-O-Verb"]
-    assert len(ai.plan_tone("creep on a budget practice amp", opener=reply)["gear"]) == 2
+    content = json.dumps({"summary": "s", "advice": [], "search_queries": ["Fractal Axe-Fx II"],
+                          "gear": [{"kind": "amp", "name": "Fractal Axe-Fx II", "role": "his live and studio rig",
+                                    "confidence": "best"}]})
+    plan = ai.plan_tone("Periphery Misha Mansoor", opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": content}}]}))
+    assert [g["name"] for g in plan["gear"]] == ["Fractal Axe-Fx II"] and plan["search_queries"] == ["Fractal Axe-Fx II"]
 
 
 def test_research_rejects_related_link_strips():
@@ -725,11 +725,15 @@ def test_bass_requests_research_bass_rigs(monkeypatch):
 
 def test_plan_drops_generic_gear_names(monkeypatch):
     monkeypatch.setattr(ai, "config", lambda: ai.AiConfig("custom", "https://x/v1", "m", "k"))
-    content = json.dumps({"summary": "s", "advice": [], "search_queries": ["Darkglass B7K", "Compressor"], "gear": [
+    content = json.dumps({"summary": "s", "advice": [], "search_queries": ["Darkglass B7K", "Compressor", "high-gain amp model"], "gear": [
         {"kind": "effect", "name": "Compressor"}, {"kind": "effect", "name": "Overdrive pedal"},
+        {"kind": "effect", "name": "Distortion device"}, {"kind": "amp", "name": "Amplifier"},
+        {"kind": "effect", "name": "fuzz distortion"}, {"kind": "amp", "name": "high-gain amp model"},
+        {"kind": "effect", "name": "ZVEX Fuzz Factory"}, {"kind": "effect", "name": "Ibanez Tube Screamer"},
         {"kind": "amp", "name": "Clean amp"}, {"kind": "effect", "name": "Darkglass Microtubes B7K"}]})
     plan = ai.plan_tone("Periphery bass", opener=lambda req, timeout: _Response({"choices": [{"message": {"content": content}}]}))
-    assert [g["name"] for g in plan["gear"]] == ["Darkglass Microtubes B7K"] and plan["search_queries"] == ["Darkglass B7K"]
+    assert [g["name"] for g in plan["gear"]] == ["ZVEX Fuzz Factory", "Ibanez Tube Screamer", "Darkglass Microtubes B7K"]
+    assert plan["search_queries"] == ["Darkglass B7K"]
 
 
 def test_forum_posts_about_a_posters_own_rig_are_not_evidence():

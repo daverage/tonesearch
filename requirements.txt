@@ -1,3 +1,4 @@
 flask>=2.2,<4
 pydantic>=2.5,<3
 ddgs
+trafilatura==2.2

@@ -245,6 +245,7 @@ def test_activity_counts_show_what_was_skipped(calls, monkeypatch):
     monkeypatch.setattr(app_module, "LIBRARY_ADMIN_PASSWORD", "pw")
     page = client.get("/admin?view=activity", headers={
         "Authorization": "Basic " + base64.b64encode(b"o:pw").decode()}).get_data(as_text=True)
-    assert "Searches answered from a saved answer" in page and "<h1>Activity</h1>" in page
+    assert "Searches answered from a saved answer" in page
+    assert '<a href="admin?view=activity" aria-current="page">Activity</a>' in page
     assert "Research library" in page  # the nav, but not the library list
-    assert "Also known as" not in page
+    assert "Also found as" not in page

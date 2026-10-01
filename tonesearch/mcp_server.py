@@ -161,7 +161,7 @@ def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
         if not isinstance(item, dict) or not str(item.get("name") or "").strip():
             raise ToolError("Each gear item needs kind, name and role.")
         name = str(item["name"]).strip()[:80]
-        if ai._GENERIC_GEAR.match(name):
+        if ai._generic(name):
             continue  # "Compressor" is a category, not a product
         kind = item.get("kind") if item.get("kind") in GEAR_KINDS else "other"
         items.append({"kind": kind, "name": name, "role": str(item.get("role") or "").strip()[:240],

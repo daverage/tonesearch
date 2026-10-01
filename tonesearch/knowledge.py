@@ -3,6 +3,9 @@
 A new search first looks for a stored entry whose topic words strongly overlap its own; only a miss goes to the
 web. Entries are reviewed on the admin page: approved ones never expire, unreviewed ones expire after
 TONESEARCH_LIBRARY_DAYS, and a visitor's "wrong research" flag keeps an entry out of use until it's reviewed.
+
+Matching is deliberately conservative: a missed reuse only costs fresh research, while a false match can attach
+one artist/song/era's research to another and contaminate later answers.
 """
 from __future__ import annotations
 
@@ -18,16 +21,11 @@ from tonesearch.research import _topic
 
 STATUSES = ("new", "approved", "flagged")
 UNREVIEWED_DAYS = float(os.environ.get("TONESEARCH_LIBRARY_DAYS", "30"))
-MATCH_THRESHOLD = 0.75  # shared topic words over all topic words (Jaccard)
+MATCH_THRESHOLD = 0.75  # shared identity words over all identity words (Jaccard)
+
 # Words that say nothing about which tone is meant, so they never decide a match.
 _GENERIC = {"guitar", "guitars", "amp", "amps", "rig", "gear", "setup", "settings", "song", "album", "record",
             "track", "band", "sound", "tone", "tones", "style", "like", "vibe", "the", "and", "for"}
-
-
-def topic_words(text: str) -> list[str]:
-    """The words that identify a tone request, lowercased, sorted and without filler."""
-    words = {w.strip(".'’-") for w in re.findall(r"[\w'’.-]+", _topic(text).lower())}
-    return sorted(w for w in words if len(w) > 1 and w not in _GENERIC)
 
 
 # How a tone sounds, not whose rig it is: "Periphery bass, compressed distorted highs" uses the same bassist's
@@ -43,41 +41,92 @@ _DESCRIPTIONS = {
 }
 
 
-def identity_words(words) -> set:
+def topic_words(text: str) -> list[str]:
+    """The words that identify a tone request, lowercased, sorted and without filler."""
+    words = {w.strip(".'’-") for w in re.findall(r"[\w'’.-]+", _topic(text).lower())}
+    return sorted(w for w in words if len(w) > 1 and w not in _GENERIC)
+
+
+def identity_words(words) -> set[str]:
     """The words that say whose rig a request is about: topic words without sound descriptions."""
     return {w for w in words if w not in _DESCRIPTIONS}
 
 
 def clean_aliases(aliases) -> list[str]:
-    """Up to 12 short names (people, bands, songs, albums, eras) with their description words removed."""
+    """Up to 12 short alternate names, kept as phrases rather than one shared bag of words."""
     cleaned = []
     for alias in aliases if isinstance(aliases, list) else []:
         words = [w for w in topic_words(str(alias)) if w not in _DESCRIPTIONS]
-        if words and len(" ".join(words)) <= 60:
-            cleaned.append(" ".join(words))
+        phrase = " ".join(words)
+        if phrase and len(phrase) <= 60:
+            cleaned.append(phrase)
     return list(dict.fromkeys(cleaned))[:12]
 
 
-def match_score(text: str, words: str, aliases: str = "", *, same_sound: bool = False) -> float:
-    """How well a request matches saved work for `words` (plus its aliases); 0 when it doesn't.
+def _alias_phrases(aliases: str) -> list[set[str]]:
+    """Existing DB format is comma-separated phrases; keep each phrase isolated while matching.
 
-    Either the two topics' identity words overlap by MATCH_THRESHOLD, or (using the aliases) every one of the
-    request's identity words, at least two, is a name the saved work goes by: so "Nolly Getgood bass" finds
-    "Periphery bass", but "Periphery" alone and "Nolly bass Juggernaut" (an era it may not cover) don't. With `same_sound`, the request
-    may not add description words the saved work lacks ("warm and clean" wants its own brief)."""
+    This deliberately supports the current schema, so no migration is required. Older rows such as
+    "adam getgood, nolly, periphery" continue to work, but words from separate aliases are never combined into
+    one synthetic identity.
+    """
+    phrases = []
+    for raw in str(aliases or "").split(","):
+        words = identity_words(topic_words(raw.strip()))
+        if words:
+            phrases.append(words)
+    return phrases
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    return len(left & right) / len(left | right) if left and right else 0.0
+
+
+def _match_details(text: str, words: str, aliases: str = "", *, same_sound: bool = False) -> tuple[float, int, bool]:
+    """Return (score, matched identity-word count, direct-topic match).
+
+    Direct topic overlap is preferred. Alias matching is deliberately conservative and checks each alias phrase
+    independently, optionally alongside the stored topic words. It never pools words from unrelated aliases.
+    """
     asked = topic_words(text)
-    wanted, theirs = identity_words(asked), identity_words(words.split())
+    wanted = identity_words(asked)
+    theirs = identity_words(words.split())
     if not wanted or not theirs:
-        return 0.0
+        return 0.0, 0, False
+
+    # Saved briefs can require the same requested sound as well as the same rig. Research lookup normally leaves
+    # same_sound=False so added adjectives such as "compressed" still reuse the same underlying rig research.
     if same_sound and set(asked) - wanted - set(words.split()):
-        return 0.0
-    overlap = len(wanted & theirs) / len(wanted | theirs)
+        return 0.0, 0, False
+
+    overlap = _jaccard(wanted, theirs)
     if overlap >= MATCH_THRESHOLD:
-        return overlap
-    known = theirs | set(aliases.replace(",", " ").split())
-    if len(wanted) >= 2 and wanted <= known:
-        return MATCH_THRESHOLD - 0.01  # below any direct overlap
-    return 0.0
+        return overlap, len(wanted & theirs), True
+
+    # Aliases are alternate names for this subject, not a vocabulary pool. Compare one phrase at a time. The stored
+    # topic words may accompany an alias so "Adam Getgood bass" can match topic "Periphery bass" + alias
+    # "Adam Getgood", but "Nolly Getgood bass" cannot be assembled from aliases "Nolly" and "Adam Getgood".
+    if len(wanted) >= 2:
+        for alias in _alias_phrases(aliases):
+            known = theirs | alias
+            if wanted <= known:
+                return MATCH_THRESHOLD - 0.01, len(wanted), False
+            alias_overlap = _jaccard(wanted, known)
+            if alias_overlap >= MATCH_THRESHOLD:
+                return MATCH_THRESHOLD - 0.01, len(wanted & known), False
+
+    return 0.0, 0, False
+
+
+def match_score(text: str, words: str, aliases: str = "", *, same_sound: bool = False) -> float:
+    """How well a request matches saved work for `words` (plus individual aliases); 0 when it doesn't.
+
+    A strong direct identity match wins. Alias matching requires at least two requested identity words and compares
+    against one alias phrase at a time, so unrelated aliases can no longer combine into a false match. With
+    `same_sound`, the request may not add description words the saved work lacks ("warm and clean" wants its own
+    saved brief even when the underlying rig research can still be reused).
+    """
+    return _match_details(text, words, aliases, same_sound=same_sound)[0]
 
 
 def _connect(db: Path) -> sqlite3.Connection:
@@ -112,21 +161,25 @@ def _best_effort(function):
 
 @_best_effort
 def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
-    """The best usable entry for a request, or None when its identity words don't overlap strongly enough.
+    """The best usable entry for a request, or None when identity overlap is not strong enough.
 
-    A request with no identity words (only descriptions, or a band called Low) matches nothing: the failure
-    is fresh research, never someone else's rig."""
+    False positives are deliberately more expensive than misses: if the subject is uncertain, fresh research is
+    safer than reusing another artist/song/era's rig. Exact/direct matches beat alias matches; where scores tie,
+    more matched identity words win, then reviewed entries win.
+    """
     if not identity_words(topic_words(text)):
         return None
     oldest = time.time() - UNREVIEWED_DAYS * 86400
-    best, best_key = None, (0.0, False)
+    best, best_key = None, (0.0, False, 0, False)
     with _connect(db) as connection:
         rows = connection.execute(
             "SELECT * FROM entries WHERE status = 'approved' OR (status = 'new' AND updated >= ?)", (oldest,))
         for row in rows:
-            score = match_score(text, row["words"], row["aliases"])
-            key = (score, row["status"] == "approved")  # ties go to reviewed entries
-            if score and key >= best_key:
+            score, matched_words, direct = _match_details(text, row["words"], row["aliases"])
+            # Direct topic evidence is safer than alias expansion. Specificity then breaks equal-score matches;
+            # approved status is deliberately last so a broader approved row cannot beat a more specific direct row.
+            key = (score, direct, matched_words, row["status"] == "approved")
+            if score and key > best_key:
                 best, best_key = row, key
         if best is None:
             return None

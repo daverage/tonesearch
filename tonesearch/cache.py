@@ -59,15 +59,26 @@ def put(db: Path | None, key: str, value, words: str = "") -> None:
         print(f"Cache unavailable: {exc}", file=sys.stderr)
 
 
-def forget_topic(db: Path | None, words: str) -> None:
-    """Drop every saved answer for a topic, so the next search works it out again."""
+def forget_topic(db: Path | None, words: str) -> int:
+    """Drop every saved answer, plan and ranking for a topic, so the next search works it out again; how many."""
     if db is None or not words:
-        return
+        return 0
     try:
         with _connect(db) as connection:
-            connection.execute("DELETE FROM cache WHERE words = ?", (words,))
+            return connection.execute("DELETE FROM cache WHERE words = ?", (words,)).rowcount
     except sqlite3.Error as exc:
         print(f"Cache unavailable: {exc}", file=sys.stderr)
+        return 0
+
+
+def answers_by_entry(db: Path | None) -> dict[int, set[str]]:
+    """For each research library entry, the topics of the saved answers built on it (found under any name)."""
+    found: dict[int, set[str]] = {}
+    for words, answer, _created in by_prefix(db, "result:", _LONGEST):
+        entry_id = ((answer or {}).get("library") or {}).get("id") if isinstance(answer, dict) else None
+        if isinstance(entry_id, int) and words:
+            found.setdefault(entry_id, set()).add(words)
+    return found
 
 
 def remember(db: Path | None, key: str, fetch, max_age: float, words: str = "", event: str = ""):

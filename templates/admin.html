@@ -5,71 +5,147 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <base href="{{ request.script_root }}/">
-  <title>Research library: TONE Search</title>
+  <title>{{ {"feedback": "Feedback", "activity": "Activity"}.get(view, "Research library") }}: TONE Search admin</title>
   <link rel="icon" href="static/favicon.ico" sizes="any">
   <link rel="stylesheet" href="static/style.css?v={{ asset_version }}">
   <style>
-    .library { max-width: 960px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
-    .library-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
-    .library-filters input { flex: 1 1 14rem; }
-    .library input, .library select, .library textarea { font: inherit; padding: 0.4rem 0.5rem; border: 1px solid var(--control-border, #999); border-radius: 6px; background: var(--panel); color: var(--text); }
-    .library textarea { width: 100%; box-sizing: border-box; }
-    .entry { border: 1px solid var(--control-border, #ccc); border-radius: 10px; padding: 1rem; margin-bottom: 1rem; background: var(--panel); }
-    .entry-flagged { border-color: #c0392b; border-width: 2px; }
-    .entry-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; justify-content: space-between; }
-    .entry label { display: block; font-weight: 600; margin: 0.6rem 0 0.2rem; }
-    .entry-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; align-items: center; }
-    .status { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; }
-    .status-flagged { color: #c0392b; }
-    .status-approved { color: #1e8449; }
-    .feedback-table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.9rem; display: block; overflow-x: auto; }
-    .feedback-table th, .feedback-table td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--control-border, #ccc); vertical-align: top; }
-    .message { padding: 0.6rem 0.8rem; border-radius: 8px; background: var(--panel); border: 1px solid var(--control-border, #ccc); }
+    .admin { max-width: 1040px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+    .admin-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.25rem; }
+    .admin-top h1 { margin: 0; font-size: 1.35rem; }
+    .admin-top h1 span { color: var(--text-muted); font-weight: 500; }
+    .tabs { display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border); margin: 0.75rem 0 1.25rem; overflow-x: auto; }
+    .tabs a { padding: 0.55rem 0.9rem; color: var(--text-muted); text-decoration: none; font-weight: 600; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+    .tabs a:hover { color: var(--text); }
+    .tabs a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
+    .lede { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 1rem; max-width: 70ch; }
+    .message { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.65rem 0.9rem; border-radius: 8px; margin: 0 0 1rem;
+               background: color-mix(in srgb, var(--accent) 9%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+    .toolbar form { display: flex; gap: 0.5rem; flex: 1 1 18rem; }
+    .toolbar input[type="search"] { flex: 1; min-width: 0; }
+    .admin input, .admin select, .admin textarea { font: inherit; padding: 0.45rem 0.6rem; border: 1px solid var(--control-border); border-radius: 7px; background: var(--panel); color: var(--text); }
+    .admin input:focus-visible, .admin select:focus-visible, .admin textarea:focus-visible, .admin summary:focus-visible, .admin a:focus-visible, .admin button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .admin textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; line-height: 1.45; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .chip { display: inline-flex; gap: 0.35rem; align-items: center; padding: 0.3rem 0.7rem; border: 1px solid var(--border); border-radius: 999px; color: var(--text); text-decoration: none; font-size: 0.85rem; background: var(--panel); }
+    .chip[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    .chip .n { font-variant-numeric: tabular-nums; opacity: 0.8; }
+    .chip-alert:not([aria-current="true"]) { border-color: var(--danger); color: var(--danger); }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; border: 1px solid currentColor; white-space: nowrap; }
+    .badge-new { color: var(--text-muted); }
+    .badge-approved { color: var(--good); }
+    .badge-flagged { color: var(--danger); }
+    .badge-best { color: var(--good); }
+    .badge-close { color: var(--accent); }
+    .badge-alternative { color: var(--text-muted); }
+    .badge-snippet { color: var(--amp-b); }
+    .entry { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); margin-bottom: 0.6rem; box-shadow: var(--shadow); }
+    .entry.is-flagged { border-color: var(--danger); }
+    .entry > details > summary { list-style: none; cursor: pointer; padding: 0.8rem 1rem; display: grid; grid-template-columns: auto 1fr auto; gap: 0.25rem 0.75rem; align-items: center; }
+    .entry > details > summary::-webkit-details-marker { display: none; }
+    .entry > details > summary::before { content: "▸"; color: var(--text-muted); grid-row: span 2; transition: transform 0.15s; }
+    .entry > details[open] > summary::before { transform: rotate(90deg); }
+    .entry-title { font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+    .entry-title .id { color: var(--text-muted); font-weight: 600; margin-right: 0.35rem; }
+    .entry-meta { grid-column: 2 / 4; color: var(--text-muted); font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 0.15rem 0.9rem; }
+    .entry-meta .votes-good { color: var(--good); }
+    .entry-meta .votes-bad { color: var(--danger); }
+    .entry-body { padding: 0 1rem 1rem; border-top: 1px solid var(--border); }
+    .entry-body h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 1rem 0 0.4rem; }
+    .callout { padding: 0.55rem 0.8rem; border-radius: 8px; margin: 0.9rem 0 0; font-size: 0.88rem; border: 1px solid; }
+    .callout-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+    .gear { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .gear td { padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .gear td.kind { color: var(--text-muted); width: 4.5rem; text-transform: capitalize; }
+    .gear td.name { font-weight: 600; white-space: nowrap; }
+    .gear td.level { width: 1%; text-align: right; }
+    .sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+    .sources li { font-size: 0.88rem; padding-left: 0.75rem; border-left: 3px solid var(--border); }
+    .sources a { font-weight: 600; overflow-wrap: anywhere; }
+    .sources p { margin: 0.2rem 0 0; color: var(--text); line-height: 1.45; }
+    .sources .host { color: var(--text-muted); font-size: 0.78rem; }
+    .muted { color: var(--text-muted); }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px dashed var(--border); }
+    .actions form { margin: 0; }
+    .actions .spacer { flex: 1; }
+    .edit > summary, .danger > summary { list-style: none; }
+    .edit > summary::-webkit-details-marker, .danger > summary::-webkit-details-marker { display: none; }
+    .edit[open] { flex-basis: 100%; order: 10; }
+    .edit-form label { display: block; font-weight: 600; font-size: 0.85rem; margin: 0.8rem 0 0.25rem; }
+    .edit-form .hint { font-weight: 400; color: var(--text-muted); }
+    .edit-form input[type="text"] { width: 100%; box-sizing: border-box; }
+    .edit-form .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.8rem; }
+    .danger[open] { flex-basis: 100%; order: 11; }
+    .danger-box { margin-top: 0.6rem; padding: 0.8rem; border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--danger) 6%, var(--panel)); font-size: 0.88rem; }
+    .danger-box ul { margin: 0.4rem 0 0.7rem; padding-left: 1.2rem; }
+    .btn-ghost-danger { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+    .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 10px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); margin-bottom: 1.5rem; }
+    .data { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .data th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); background: var(--panel-alt); }
+    .data th, .data td { padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .data tr:last-child td { border-bottom: 0; }
+    .data td.num, .data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .data td.zero { color: var(--text-muted); }
+    .data form { margin: 0; }
+    h2 { font-size: 1.05rem; margin: 1.5rem 0 0.6rem; }
+    @media (max-width: 640px) {
+      .entry > details > summary { grid-template-columns: auto 1fr; }
+      .entry > details > summary .badge { grid-column: 2; justify-self: start; }
+      .entry-meta { grid-column: 2; }
+      .gear td.name { white-space: normal; }
+    }
   </style>
 </head>
 <body>
-  <main class="library">
-    <h1>{{ {"feedback": "Feedback", "activity": "Activity"}.get(view, "Research library") }}</h1>
-    <nav class="library-filters" aria-label="Admin sections">
-      <a class="btn btn-small {{ 'btn-primary' if view != 'feedback' else 'btn-secondary' }}" href="admin">Research library</a>
-      <a class="btn btn-small {{ 'btn-primary' if view == 'feedback' else 'btn-secondary' }}" href="admin?view=feedback">Feedback</a>
-      <a class="btn btn-small {{ 'btn-primary' if view == 'activity' else 'btn-secondary' }}" href="admin?view=activity">Activity</a>
-    </nav>
-    {% if view == "activity" %}
-    <p class="info">How often each step was skipped by reusing saved work, per day (UTC). Paired rows show reused against worked out.</p>
-    {% if activity %}
-    {% set days = activity.keys()|list %}
-    <table class="feedback-table">
-      <thead><tr><th>Step</th>{% for day in days %}<th>{{ day[5:] }}</th>{% endfor %}<th>Total</th></tr></thead>
-      <tbody>
-      {% for event, label in events %}
-        <tr><td>{{ label }}</td>
-          {% set ns = namespace(total=0) %}
-          {% for day in days %}{% set n = activity[day].get(event, 0) %}{% set ns.total = ns.total + n %}<td>{{ n or "" }}</td>{% endfor %}
-          <td><strong>{{ ns.total }}</strong></td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p>No searches counted yet. Counts start once this version is live.</p>{% endif %}
-    {% endif %}
-    {% if view == "activity" %}
-    {% elif view == "feedback" %}
-    {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
-    <h2>Topics</h2>
-    <p class="info">Most reported briefs first. Open a topic in the research library to fix its notes and gear.</p>
-    <table class="feedback-table">
-      <thead><tr><th>Topic</th><th>Votes</th><th>Good</th><th>Bad</th><th>Bad briefs</th><th></th></tr></thead>
-      <tbody>
-      {% for t in topics %}
-        <tr><td>{{ t.words }}</td><td>{{ t.votes }}</td><td>{{ t.good }}</td><td>{{ t.bad }}</td><td>{{ t.bad_briefs }}</td>
-          <td><a href="admin?q={{ t.words|urlencode }}">Research</a></td></tr>
-      {% else %}<tr><td colspan="6">No feedback yet.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-    <h2>Recent votes</h2>
-    <form class="library-filters" method="get" action="admin">
+<main class="admin">
+  <header class="admin-top">
+    <h1>TONE Search <span>admin</span></h1>
+    <a class="btn-small-link" href="./">Open the site</a>
+  </header>
+  <nav class="tabs" aria-label="Admin sections">
+    <a href="admin" {% if view == "library" %}aria-current="page"{% endif %}>Research library</a>
+    <a href="admin?view=feedback" {% if view == "feedback" %}aria-current="page"{% endif %}>Feedback</a>
+    <a href="admin?view=activity" {% if view == "activity" %}aria-current="page"{% endif %}>Activity</a>
+  </nav>
+  {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
+
+{% if view == "activity" %}
+  <p class="lede">How often each step was skipped by reusing saved work, per day (UTC). Paired rows compare reused with worked out.</p>
+  {% if activity %}
+  {% set days = activity.keys()|list %}
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Step</th>{% for day in days %}<th class="num">{{ day[5:] }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
+    <tbody>
+    {% for event, label in events %}
+      <tr><td>{{ label }}</td>
+        {% set ns = namespace(total=0) %}
+        {% for day in days %}{% set n = activity[day].get(event, 0) %}{% set ns.total = ns.total + n %}<td class="num {{ 'zero' if not n }}">{{ n or "·" }}</td>{% endfor %}
+        <td class="num"><strong>{{ ns.total }}</strong></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">No searches counted yet.</p>{% endif %}
+
+{% elif view == "feedback" %}
+  <p class="lede">What visitors and MCP users thought of tone briefs and packs. A bad brief flags its research for review. Deleting a vote removes its effect on pack order.</p>
+  <h2>Topics</h2>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>Topic words</th><th class="num">Votes</th><th class="num">Good</th><th class="num">Bad</th><th class="num">Bad briefs</th><th></th></tr></thead>
+    <tbody>
+    {% for t in topics %}
+      <tr><td>{{ t.words }}</td><td class="num">{{ t.votes }}</td><td class="num">{{ t.good }}</td><td class="num">{{ t.bad }}</td>
+        <td class="num {{ 'zero' if not t.bad_briefs }}">{{ t.bad_briefs }}</td>
+        <td><a href="admin?view=feedback&amp;q={{ t.words|urlencode }}">Votes</a></td></tr>
+    {% else %}<tr><td colspan="6" class="muted">No feedback yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+
+  <h2>Votes</h2>
+  <div class="toolbar">
+    <form method="get" action="admin" role="search">
       <input type="hidden" name="view" value="feedback">
-      <input type="search" name="q" value="{{ q }}" placeholder="Search prompts, packs or comments" aria-label="Search">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search requests, packs or comments" aria-label="Search votes">
       <select name="vote" aria-label="Vote">
         <option value="">All votes</option>
         <option value="good" {% if vote == 'good' %}selected{% endif %}>Good</option>
@@ -77,67 +153,144 @@
       </select>
       <button class="btn btn-secondary btn-small" type="submit">Filter</button>
     </form>
-    <table class="feedback-table">
-      <thead><tr><th>When</th><th>Vote</th><th>Request</th><th>Rated</th><th>Comment</th><th>From</th></tr></thead>
-      <tbody>
-      {% for v in votes %}
-        <tr>
-          <td>{{ v.created|datetime }}</td>
-          <td class="{{ 'status-approved' if v.vote == 1 else 'status-flagged' }}">{{ "Good" if v.vote == 1 else "Bad" }}</td>
-          <td>{{ v.prompt }}</td>
-          <td>{% if v.target == "pack" %}<a href="https://www.tone3000.com/tones/{{ v.pack_id }}" rel="noopener noreferrer" target="_blank">{{ v.pack_title or ("Pack " ~ v.pack_id) }}</a>{% else %}Tone brief{% if v.entry_id %} (<a href="admin?q={{ ('#' ~ v.entry_id)|urlencode }}">research #{{ v.entry_id }}</a>){% endif %}{% endif %}</td>
-          <td>{{ v.comment }}</td>
-          <td>{{ "Website" if v.source == "web" else "MCP" }}</td>
-        </tr>
-      {% else %}<tr><td colspan="6">No votes match.</td></tr>{% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="info">Saved web research, reused when a new search's topic strongly matches. Flagged entries aren't used until you review them. Approved entries never expire; unreviewed ones expire after {{ days|int }} days.</p>
-    {% if message %}<p class="message" role="status">{{ message }}</p>{% endif %}
+  </div>
+  <div class="table-wrap"><table class="data">
+    <thead><tr><th>When</th><th>Vote</th><th>Request</th><th>Rated</th><th>Comment</th><th>From</th><th></th></tr></thead>
+    <tbody>
+    {% for v in votes %}
+      <tr>
+        <td style="white-space:nowrap">{{ v.created|datetime }}</td>
+        <td><span class="badge {{ 'badge-approved' if v.vote == 1 else 'badge-flagged' }}">{{ "Good" if v.vote == 1 else "Bad" }}</span></td>
+        <td>{{ v.prompt }}</td>
+        <td>{% if v.target == "pack" %}<a href="https://www.tone3000.com/tones/{{ v.pack_id }}" rel="noopener noreferrer" target="_blank">{{ v.pack_title or ("Pack " ~ v.pack_id) }}</a>{% else %}Tone brief{% if v.entry_id %} · <a href="admin?q={{ ('#' ~ v.entry_id)|urlencode }}">research #{{ v.entry_id }}</a>{% endif %}{% endif %}</td>
+        <td>{{ v.comment }}</td>
+        <td>{{ "Website" if v.source == "web" else "MCP" }}</td>
+        <td><form method="post" action="admin/votes/{{ v.id }}/delete">
+          <input type="hidden" name="filter_q" value="{{ q }}"><input type="hidden" name="filter_vote" value="{{ vote }}">
+          <button class="btn btn-small btn-ghost-danger" type="submit" aria-label="Delete this vote">Delete</button>
+        </form></td>
+      </tr>
+    {% else %}<tr><td colspan="7" class="muted">No votes match.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
 
-    <form class="library-filters" method="get" action="admin">
-      <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear, or #8 for one entry" aria-label="Search">
-      <select name="status" aria-label="Status">
-        <option value="">All ({{ counts.all }})</option>
-        {% for name in statuses %}<option value="{{ name }}" {% if status == name %}selected{% endif %}>{{ name|capitalize }} ({{ counts[name] }})</option>{% endfor %}
-      </select>
-      <button class="btn btn-secondary btn-small" type="submit">Filter</button>
+{% else %}
+  <p class="lede">Saved web research, reused when a new search names the same rig. Flagged research isn't used until you review it. Approved research never expires; unreviewed research expires after {{ days|int }} days.</p>
+  <div class="toolbar">
+    <nav class="chips" aria-label="Filter by status">
+      <a class="chip" href="admin{% if q %}?q={{ q|urlencode }}{% endif %}" {% if not status %}aria-current="true"{% endif %}>All <span class="n">{{ counts.all }}</span></a>
+      {% for name in statuses %}
+      <a class="chip {{ 'chip-alert' if name == 'flagged' and counts[name] }}" href="admin?status={{ name }}{% if q %}&amp;q={{ q|urlencode }}{% endif %}" {% if status == name %}aria-current="true"{% endif %}>{{ name|capitalize }} <span class="n">{{ counts[name] }}</span></a>
+      {% endfor %}
+    </nav>
+    <form method="get" action="admin" role="search">
+      {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+      <input type="search" name="q" value="{{ q }}" placeholder="Search topics, notes or gear, or #8 for one entry" aria-label="Search research">
+      <button class="btn btn-secondary btn-small" type="submit">Search</button>
     </form>
+  </div>
 
-    {% for entry in entries %}
-    <form class="entry {% if entry.status == 'flagged' %}entry-flagged{% endif %}" method="post" action="admin/entries/{{ entry.id }}" id="entry-{{ entry.id }}">
-      <input type="hidden" name="filter_q" value="{{ q }}">
-      <input type="hidden" name="filter_status" value="{{ status }}">
-      <div class="entry-head">
-        <strong>#{{ entry.id }} · {{ entry.topic }}</strong>
-        <span class="status status-{{ entry.status }}">{{ entry.status }}{% if entry.flags %} · {{ entry.flags }} report{{ 's' if entry.flags != 1 }}{% endif %} · used {{ entry.uses }}×</span>
-      </div>
-      {% if entry.flag_reason %}<p class="t3ai-warning">Reported: {{ entry.flag_reason }}</p>{% endif %}
-      <label for="topic-{{ entry.id }}">Topic</label>
-      <input id="topic-{{ entry.id }}" name="topic" value="{{ entry.topic }}" maxlength="200" style="width:100%;box-sizing:border-box">
-      <label for="aliases-{{ entry.id }}">Also known as (comma-separated names that find this research: player, band, song, album, era)</label>
-      <input id="aliases-{{ entry.id }}" name="aliases" value="{{ entry.aliases }}" maxlength="600" style="width:100%;box-sizing:border-box">
-      <label for="gear-{{ entry.id }}">Gear (one per line: kind | name | role | best, close or alternative)</label>
-      <p class="info" style="margin:0.1rem 0 0.3rem"><strong>best</strong> = documented for this recording or era, or meets every requirement; <strong>close</strong> = the artist's gear from another era, or misses one requirement; <strong>alternative</strong> = a substitute, modern equivalent or guess.</p>
-      <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }} | {{ confidence_of(g.confidence) }}
+  {% for entry in entries %}
+  {% set link = links[entry.id] %}
+  {% set sources = entry.notes|sources %}
+  <article class="entry {{ 'is-flagged' if entry.status == 'flagged' }}" id="entry-{{ entry.id }}">
+    <details {% if entry.status == 'flagged' or entries|length == 1 %}open{% endif %}>
+      <summary>
+        <span class="entry-title"><span class="id">#{{ entry.id }}</span>{{ entry.topic }}</span>
+        <span class="badge badge-{{ entry.status }}">{{ entry.status }}{% if entry.flags %} · {{ entry.flags }}{% endif %}</span>
+        <span class="entry-meta">
+          <span>{{ entry.gear|length }} gear</span>
+          <span>{{ sources|length }} source{{ 's' if sources|length != 1 }}</span>
+          <span>used {{ entry.uses }}×</span>
+          {% if link.good or link.bad %}<span><span class="votes-good">{{ link.good }} good</span> · <span class="votes-bad">{{ link.bad }} bad</span></span>{% endif %}
+          <span>updated {{ entry.updated|datetime }}</span>
+        </span>
+      </summary>
+      <div class="entry-body">
+        {% if entry.flag_reason %}<p class="callout callout-danger"><strong>Reported:</strong> {{ entry.flag_reason }}</p>{% endif %}
+
+        {% if entry.aliases %}
+        <h3>Also found as</h3>
+        <div class="chips">{% for alias in entry.aliases.split(",") if alias.strip() %}<span class="chip">{{ alias.strip() }}</span>{% endfor %}</div>
+        {% endif %}
+
+        <h3>Gear</h3>
+        {% if entry.gear %}
+        <table class="gear"><tbody>
+          {% for g in entry.gear %}{% set level = confidence_of(g.confidence) %}
+          <tr><td class="kind">{{ g.kind }}</td><td class="name">{{ g.name }}</td><td>{{ g.role }}</td>
+            <td class="level"><span class="badge badge-{{ level }}">{{ level }}</span></td></tr>
+          {% endfor %}
+        </tbody></table>
+        {% else %}<p class="muted">No gear yet: the next search for this topic fills it in, or add it under Edit.</p>{% endif %}
+
+        <h3>Sources</h3>
+        {% if sources %}
+        <ul class="sources">
+          {% for s in sources %}
+          <li>{% if s.url %}<a href="{{ s.url }}" rel="noopener noreferrer nofollow" target="_blank">{{ s.title or s.url }}</a>
+              <span class="host">{{ s.url.split('/')[2] if s.url.count('/') >= 2 else '' }}</span>{% else %}<strong>{{ s.title or "Note" }}</strong>{% endif %}
+              {% if s.snippet %}<span class="badge badge-snippet" title="The page couldn't be read: this is the search engine's snippet">Snippet only</span>{% endif %}
+            <p>{{ s.text }}</p></li>
+          {% endfor %}
+        </ul>
+        {% else %}<p class="muted">No sources.</p>{% endif %}
+
+        <div class="actions">
+          {% if entry.status != 'approved' %}
+          <form method="post" action="admin/entries/{{ entry.id }}">
+            <input type="hidden" name="filter_q" value="{{ q }}"><input type="hidden" name="filter_status" value="{{ status }}">
+            <button class="btn btn-primary btn-small" type="submit" name="action" value="approve_only">Approve</button>
+          </form>
+          {% endif %}
+          <details class="edit">
+            <summary class="btn btn-secondary btn-small">Edit</summary>
+            <form class="edit-form" method="post" action="admin/entries/{{ entry.id }}">
+              <input type="hidden" name="filter_q" value="{{ q }}"><input type="hidden" name="filter_status" value="{{ status }}">
+              <label for="topic-{{ entry.id }}">Topic</label>
+              <input type="text" id="topic-{{ entry.id }}" name="topic" value="{{ entry.topic }}" maxlength="200" required>
+              <label for="aliases-{{ entry.id }}">Also found as <span class="hint">: other names for this same rig, comma-separated (player, band, song, album, era). Not gear, genres or other players.</span></label>
+              <input type="text" id="aliases-{{ entry.id }}" name="aliases" value="{{ entry.aliases }}" maxlength="600">
+              <label for="gear-{{ entry.id }}">Gear <span class="hint">: one per line, kind | name | role | best, close or alternative</span></label>
+              <textarea id="gear-{{ entry.id }}" name="gear" rows="{{ [entry.gear|length + 1, 3]|max }}">{% for g in entry.gear %}{{ g.kind }} | {{ g.name }} | {{ g.role }} | {{ confidence_of(g.confidence) }}
 {% endfor %}</textarea>
-      <label for="notes-{{ entry.id }}">Research notes (one source per line: - title: text (url))</label>
-      <textarea id="notes-{{ entry.id }}" name="notes" rows="6">{{ entry.notes }}</textarea>
-      <div class="entry-actions">
-        <label for="status-{{ entry.id }}" style="margin:0">Status</label>
-        <select id="status-{{ entry.id }}" name="status">
-          {% for name in statuses %}<option value="{{ name }}" {% if entry.status == name %}selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}
-        </select>
-        <button class="btn btn-primary btn-small" type="submit" name="action" value="save">Save</button>
-        <button class="btn btn-secondary btn-small" type="submit" name="action" value="approve">Approve</button>
-        <button class="btn btn-secondary btn-small" type="submit" name="action" value="delete" formnovalidate>Delete</button>
+              <p class="info"><strong>best</strong>: documented for this recording or era, or meets every requirement. <strong>close</strong>: the artist's gear from another era, or misses one requirement. <strong>alternative</strong>: a substitute, modern equivalent or guess.</p>
+              <label for="notes-{{ entry.id }}">Sources <span class="hint">: one per line, - title: text (url)</span></label>
+              <textarea id="notes-{{ entry.id }}" name="notes" rows="{{ [sources|length * 3 + 1, 6]|max }}">{{ entry.notes }}</textarea>
+              <div class="row">
+                <label for="status-{{ entry.id }}" style="margin:0">Status</label>
+                <select id="status-{{ entry.id }}" name="status">
+                  {% for name in statuses %}<option value="{{ name }}" {% if entry.status == name %}selected{% endif %}>{{ name|capitalize }}</option>{% endfor %}
+                </select>
+                <button class="btn btn-primary btn-small" type="submit" name="action" value="save">Save changes</button>
+                {% if entry.status != 'approved' %}<button class="btn btn-secondary btn-small" type="submit" name="action" value="approve">Save and approve</button>{% endif %}
+              </div>
+              <p class="info">Saving clears the saved answers built on the old research, so the next search uses your changes.</p>
+            </form>
+          </details>
+          <span class="spacer"></span>
+          <details class="danger">
+            <summary class="btn btn-small btn-ghost-danger">Delete…</summary>
+            <form class="danger-box" method="post" action="admin/entries/{{ entry.id }}">
+              <input type="hidden" name="filter_q" value="{{ q }}"><input type="hidden" name="filter_status" value="{{ status }}">
+              <strong>Delete research #{{ entry.id }} and everything built on it?</strong>
+              <ul>
+                <li>this research, its gear and its sources</li>
+                <li>{{ link.answers }} saved answer{{ 's' if link.answers != 1 }}, plus the saved plans and rankings, for: {{ link.topics|join(", ") }}</li>
+                <li>{{ link.good + link.bad }} vote{{ 's' if link.good + link.bad != 1 }} ({{ link.good }} good, {{ link.bad }} bad)</li>
+              </ul>
+              <p class="muted" style="margin:0 0 0.7rem">This can't be undone. The next search for this topic researches it again from scratch.</p>
+              <button class="btn btn-danger btn-small" type="submit" name="action" value="delete">Delete research, answers and votes</button>
+            </form>
+          </details>
+        </div>
       </div>
-    </form>
-    {% else %}
-    <p>No entries{% if q or status %} match this filter{% endif %}.</p>
-    {% endfor %}
-    {% endif %}
-  </main>
+    </details>
+  </article>
+  {% else %}
+  <p class="empty">{% if q or status %}No research matches this filter. <a href="admin">Show all</a>{% else %}No research saved yet. It appears here after the first search with web research.{% endif %}</p>
+  {% endfor %}
+{% endif %}
+</main>
 </body>
 </html>

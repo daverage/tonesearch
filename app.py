@@ -8,8 +8,10 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import sqlite3
 import time
+
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlparse
 
@@ -267,6 +269,61 @@ def _parse_gear(text: str) -> list:
     return gear
 
 
+_NOTE = re.compile(r"^- (.*?): (.*) \((https?://[^\s)]+)\)$")
+
+
+def _sources(notes: str) -> list[dict]:
+    """Research notes as sources for the admin page: title, text, link, and whether only a search snippet."""
+    sources = []
+    for line in (notes or "").splitlines():
+        if not line.strip():
+            continue
+        match = _NOTE.match(line.strip())
+        title, text, url = match.groups() if match else ("", line.strip().removeprefix("- "), "")
+        snippet = text.startswith("Search snippet only: ")
+        sources.append({"title": title, "text": text.removeprefix("Search snippet only: "), "url": url,
+                        "snippet": snippet})
+    return sources
+
+
+app.jinja_env.filters["sources"] = _sources
+
+
+def _entry_links(db, entries: list) -> dict:
+    """What each library entry's research reaches: the topics of searches that used it (its own words, saved
+    answers built on it under any name, votes on it), how many saved answers, and its votes."""
+    answers = cache.answers_by_entry(db)
+    try:
+        votes = feedback.all_votes(db)
+    except sqlite3.Error:
+        votes = []
+    links = {}
+    for entry in entries:
+        topics = {entry["words"]} | answers.get(entry["id"], set()) | {v["words"] for v in votes
+                                                                      if v["entry_id"] == entry["id"]}
+        mine = [v for v in votes if v["entry_id"] == entry["id"] or v["words"] in topics]
+        links[entry["id"]] = {"topics": sorted(t for t in topics if t), "answers": len(answers.get(entry["id"], ())),
+                              "good": sum(v["vote"] == 1 for v in mine), "bad": sum(v["vote"] == -1 for v in mine)}
+    return links
+
+
+def _delete_entry(db, entry_id: int) -> str:
+    """Delete a research entry and everything built on it: saved answers, plans and rankings for every topic that
+    used it, and the votes on those topics and on the entry itself."""
+    entry = knowledge.get(db, entry_id)
+    if not entry:
+        return f"Research #{entry_id} was already deleted."
+    link = _entry_links(db, [entry])[entry_id]
+    saved = sum(cache.forget_topic(db, words) for words in link["topics"])
+    try:
+        votes = feedback.forget(db, words=link["topics"], entry_id=entry_id)
+    except sqlite3.Error:
+        votes = 0
+    knowledge.delete(db, entry_id)
+    return (f"Deleted research #{entry_id} ({entry['topic']}), {saved} saved answer{'s' if saved != 1 else ''} and "
+            f"plan{'s' if saved != 1 else ''}, and {votes} vote{'s' if votes != 1 else ''}.")
+
+
 @app.get("/admin")
 def admin():
     if denied := _admin_denied():
@@ -282,9 +339,10 @@ def admin():
                                topics=feedback.topic_summary(_library()), message=request.args.get("message", "")[:200])
     every = knowledge.search(_library(), limit=100_000)
     counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
-    return render_template("admin.html", view="library", entries=knowledge.search(_library(), q, status), q=q, status=status,
-                           statuses=knowledge.STATUSES, counts=counts, days=knowledge.UNREVIEWED_DAYS,
-                           message=request.args.get("message", "")[:200])
+    entries = knowledge.search(_library(), q, status)
+    return render_template("admin.html", view="library", entries=entries, links=_entry_links(_library(), entries),
+                           q=q, status=status, statuses=knowledge.STATUSES, counts=counts,
+                           days=knowledge.UNREVIEWED_DAYS, message=request.args.get("message", "")[:300])
 
 
 @app.post("/admin/entries/<int:entry_id>")
@@ -294,21 +352,36 @@ def admin_entry(entry_id: int):
     form = request.form
     action = form.get("action", "save")
     before = knowledge.get(_library(), entry_id)
-    if before:  # saved plans and results for this topic were built on the old research
-        cache.forget_topic(_library(), before["words"])
     if action == "delete":
-        knowledge.delete(_library(), entry_id)
-        message = f"Deleted entry {entry_id}."
+        message = _delete_entry(_library(), entry_id)
+    elif not before:
+        message = f"Research #{entry_id} no longer exists."
+    elif action == "approve_only":  # one click from the list: keep everything, change only the status
+        knowledge.update(_library(), entry_id, topic=before["topic"], notes=before["notes"], gear=before["gear"],
+                         aliases=(before.get("aliases") or "").split(","), status="approved")
+        message = f"Approved research #{entry_id}."
     else:
+        cache.forget_topic(_library(), before["words"])  # saved plans and results were built on the old research
         try:
             knowledge.update(_library(), entry_id, topic=form.get("topic", ""), notes=form.get("notes", ""),
                              gear=_parse_gear(form.get("gear", "")), aliases=form.get("aliases", "")[:600].split(","),
                              status="approved" if action == "approve" else form.get("status", "new"))
-            message = f"Saved entry {entry_id}."
+            message = f"Saved research #{entry_id}{' and approved it' if action == 'approve' else ''}."
         except ValueError as exc:
-            message = f"Entry {entry_id} not saved: {exc}"
+            message = f"Research #{entry_id} not saved: {exc}"
     # Back to the same filtered list, so reviewing (say) every flagged entry doesn't mean filtering again each time.
     keep = {"q": form.get("filter_q", "")[:100], "status": form.get("filter_status", "")}
+    keep = {name: value for name, value in keep.items() if value}
+    return redirect(f"{request.script_root}/admin?{urlencode({**keep, 'message': message})}", 303)
+
+
+@app.post("/admin/votes/<int:vote_id>/delete")
+def admin_vote_delete(vote_id: int):
+    if denied := _admin_denied():
+        return denied
+    deleted = feedback.delete_vote(_library(), vote_id)
+    message = "Deleted the vote." if deleted else "That vote was already deleted."
+    keep = {"view": "feedback", "q": request.form.get("filter_q", "")[:100], "vote": request.form.get("filter_vote", "")}
     keep = {name: value for name, value in keep.items() if value}
     return redirect(f"{request.script_root}/admin?{urlencode({**keep, 'message': message})}", 303)
 

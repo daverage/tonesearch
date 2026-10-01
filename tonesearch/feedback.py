@@ -90,3 +90,30 @@ def topic_summary(db: Path, limit: int = 50) -> list[dict]:
             "SELECT words, COUNT(*) AS votes, SUM(vote = 1) AS good, SUM(vote = -1) AS bad,"
             " SUM(target = 'brief' AND vote = -1) AS bad_briefs, MAX(created) AS latest"
             " FROM feedback GROUP BY words ORDER BY bad_briefs DESC, votes DESC LIMIT ?", (limit,))]
+
+
+def all_votes(db: Path) -> list[dict]:
+    """Every vote's topic, research entry and direction, for linking votes to library entries."""
+    with _connect(db) as connection:
+        return [dict(row) for row in connection.execute("SELECT id, words, entry_id, vote FROM feedback")]
+
+
+def forget(db: Path, *, words=(), entry_id: int | None = None) -> int:
+    """Delete the votes for these topics and for this research entry; how many were deleted."""
+    words = [w for w in words if w]
+    clauses, params = [], []
+    if entry_id is not None:
+        clauses.append("entry_id = ?")
+        params.append(entry_id)
+    if words:
+        clauses.append(f"words IN ({', '.join('?' * len(words))})")
+        params += words
+    if not clauses:
+        return 0
+    with _connect(db) as connection:
+        return connection.execute(f"DELETE FROM feedback WHERE {' OR '.join(clauses)}", params).rowcount
+
+
+def delete_vote(db: Path, vote_id: int) -> bool:
+    with _connect(db) as connection:
+        return connection.execute("DELETE FROM feedback WHERE id = ?", (vote_id,)).rowcount > 0
