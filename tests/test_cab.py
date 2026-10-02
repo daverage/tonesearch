@@ -448,3 +448,10 @@ def test_fetch_output_encodes_spaces_in_kaggle_links():
     url = "https://www.kaggleusercontent.com/kf/1/eyJ..abc/SLASH_AFD_2_Head + Modern Boutique 4x12.nam"
     assert kaggle.fetch_output(url, opener=opener) == b"model"
     assert calls[0].full_url == "https://www.kaggleusercontent.com/kf/1/eyJ..abc/SLASH_AFD_2_Head%20+%20Modern%20Boutique%204x12.nam"
+
+
+def test_tools_page_renders_without_ads_and_links_the_tools(client):
+    page = client.get("/tools").get_data(as_text=True)
+    assert "File tools" in page and f"static/v{app_module.ASSET_VERSION}/tools.js" in page
+    assert "adsbygoogle" not in page and 'href="cab"' in page
+    assert 'href="tools"' in client.get("/").get_data(as_text=True)

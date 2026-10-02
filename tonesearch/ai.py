@@ -811,6 +811,36 @@ _FORMAT_WORDS = {"amp", "amplifier", "head", "combo", "the"}
 _STAND_IN = re.compile(r"\b(alternative|substitute|stand-in|modern equivalent|replica|instead of)\b", re.IGNORECASE)
 
 
+def named_in(name: str, notes: str) -> bool:
+    """True when research notes mention the product, written the way sources write it.
+
+    Its model word counts on its own ("B7K", "Cali76", "MM-290"), also when a source splits it ("ESP MX models
+    [220 and a 250]" names the MX220); otherwise two of its other words must appear, or the whole name run
+    together ("Tubescreamer" for "Tube Screamer"). One shared word ("Marshall") isn't enough: "Marshall JCM900"
+    isn't named by notes about a different Marshall.
+    """
+    text = notes.lower()
+    spaced = set(re.findall(r"[a-z0-9]+", text))
+    squashed = re.sub(r"[^a-z0-9]", "", text)
+    words = [w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) > 2 or any(c.isdigit() for c in w)]
+    if not words:
+        return False
+    if re.sub(r"[^a-z0-9]", "", name.lower()) in squashed:
+        return True
+    for word in words:
+        if not any(c.isdigit() for c in word):
+            continue
+        runs = re.findall(r"[a-z]+|[0-9]+", word)  # "mx220" -> "mx", "220": both must appear as words
+        if word in spaced or all(run in spaced for run in runs):
+            return True
+    plain = [w for w in words if not any(c.isdigit() for c in w)]
+    found = {w for w in plain if w in spaced}
+    for first, second in zip(plain, plain[1:]):  # "Tube Screamer" written "Tubescreamer"
+        if first + second in spaced:
+            found.update((first, second))
+    return len(found) >= min(2, len(words))  # a model word that wasn't found still counts as a word to match
+
+
 def _same_gear(a: str, b: str) -> bool:
     """True when one name is the other with words left out: 'Deluxe Reverb' and 'Fender Deluxe Reverb', not
     'Fender Twin Reverb'."""
@@ -872,9 +902,15 @@ def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: lis
         words = {w for w in re.findall(r"[a-z0-9]+", keyword.lower()) if len(w) > 2} - _COMMON_WORDS
         return bool(words) and 2 * len(words & asked) >= len(words)
 
+    def adds_a_word(alias: str) -> bool:
+        # 'Black' or 'Metallica' alone, for "Metallica's Black Album", is one of the request's own words: it can never
+        # help a later search find this research, so it would just take a place.
+        words = [w for w in re.findall(r"[a-z0-9]+", alias.lower()) if len(w) > 1]
+        return not (len(words) == 1 and words[0] in {w.removesuffix("s") for w in asked} | asked)
+
     def usable(items: list, keep) -> list:
         texts = [a.strip()[:60] for a in items if isinstance(a, str) and a.strip()]
-        return [a for a in texts if not _generic(a) and not names_gear(a) and keep(a)][:5]
+        return [a for a in texts if not _generic(a) and not names_gear(a) and adds_a_word(a) and keep(a)][:5]
 
     # For "clean pedal platform amp cab gigging" a model listed "beatles": a request for needs names nobody.
     names = usable(aliases, in_request if needs else supported)
@@ -918,7 +954,7 @@ def _whole_lines(text: str, limit: int) -> str:
 # Saved plans and answers are filed under this, so raising it makes every search work its plan out again. Raise it
 # whenever plan_tone's rules change what a plan contains (as when aliases began to be checked against the evidence):
 # otherwise searches reuse plans made by the old rules for up to 30 days (cache.AI_SECONDS).
-PLAN_VERSION = 3  # 3: keywords for every request
+PLAN_VERSION = 4  # 3: keywords for every request; 4: gear the research never names is an alternative
 
 
 def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] = None, opener=urlopen,
@@ -964,7 +1000,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "a tone-settings site's catalogue claims or averaged EQ settings, and include every amp the player names.\n  "
         "When research names a specific product, use exactly that product and never swap in a different, better-known "
         "one or a category ('ZVEX Fuzz Factory', not 'distortion device'); if it is uncertain, still name the researched "
-        "one and say so in its role. Ignore gear that a tone-settings site recommends for recreating the sound today "
+        "one and say so in its role. When a source names gear only partly (a maker and a series, or 'a modified "
+        "Marshall'), list it in the source's own words rather than a specific model the source doesn't name, and "
+        "write each role from what the notes say, not from memory. Ignore gear that a tone-settings site recommends for recreating the sound today "
         "(modelling or practice amps such as a Fender Mustang, Boss Katana or Positive Grid Spark) unless the player asks "
         "for budget or modern gear; but a modeller a source says the artist plays (an Axe-Fx, Kemper or Helix rig) is "
         "their real gear.\n"
@@ -991,6 +1029,13 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         if gear.kind == "amp" and _KNOWN_PEDALS.search(gear.name):
             gear.kind = "effect"
     plan.gear = [g for g in plan.gear if not _generic(g.name)]
+    # With research to go on, gear it never names is the model's own knowledge: on the prompt's scale that is
+    # 'alternative', whatever label the model chose. Not for needs requests, where 'best' means meeting the needs.
+    if research_notes and not plan.requirements:
+        for gear in plan.gear:
+            if gear.confidence != "alternative" and not named_in(gear.name, research_notes):
+                gear.confidence = "alternative"
+                gear.role = f"{gear.role.strip()} (not named in the research)".strip()
     queries = [q.strip()[:80] for q in plan.search_queries if q and not _generic(q)]
     # Recording gear is never what a capture captures; a guitar only is when the player wants guitar captures.
     uncapturable = ("mic",) if _WANTS_GUITAR.search(prompt) else ("mic", "guitar", "pickup")

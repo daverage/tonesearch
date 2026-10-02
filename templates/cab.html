@@ -24,18 +24,22 @@
       </div>
       <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> Cab embed</h1>
       <p class="intro">Bake a cabinet IR into an amp capture, so one NAM file plays the amp and the cab together in any player that loads A2 captures. Listen to the pair in your browser first, then train the new file on your own free <a href="https://www.kaggle.com/" target="_blank" rel="noopener">Kaggle</a> account.</p>
+      <nav class="tool-nav" aria-label="NAM tools">
+        <a href="tools">File tools</a>
+        <a href="cab" aria-current="page">Cab embed</a>
+      </nav>
     </header>
 
-    <main id="main" class="cab-main">
-      <section class="panel cab-section" id="cab-files" aria-labelledby="files-title" tabindex="-1">
-        <div class="cab-step-head">
-          <span class="cab-step" aria-hidden="true">1</span>
+    <main id="main" class="tool-main">
+      <section class="panel tool-section" id="cab-files" aria-labelledby="files-title" tabindex="-1">
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">1</span>
           <div>
             <h2 id="files-title"><span class="visually-hidden">Step 1: </span>Choose your files</h2>
-            <p class="cab-lead">They stay on your computer until you start a training.</p>
+            <p class="tool-lead">They stay on your computer until you start a training.</p>
           </div>
         </div>
-        <div class="cab-grid">
+        <div class="tool-grid">
           <div class="file-pick" data-state="empty">
             <input type="file" id="nam-file" class="file-pick-input" accept=".nam,application/json" aria-describedby="nam-hint nam-info">
             <label for="nam-file" class="file-pick-target">
@@ -57,16 +61,16 @@
         </div>
       </section>
 
-      <section class="panel cab-section" aria-labelledby="listen-title">
-        <div class="cab-step-head">
-          <span class="cab-step" aria-hidden="true">2</span>
+      <section class="panel tool-section" aria-labelledby="listen-title">
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">2</span>
           <div>
             <h2 id="listen-title"><span class="visually-hidden">Step 2: </span>Listen</h2>
-            <p class="cab-lead">Plays through Neural Amp Modeler's engine in your browser. Nothing is uploaded. Use headphones with live input to avoid feedback.</p>
+            <p class="tool-lead">Plays through Neural Amp Modeler's engine in your browser. Nothing is uploaded. Use headphones with live input to avoid feedback.</p>
           </div>
         </div>
-        <div class="cab-grid">
-          <fieldset class="cab-choice">
+        <div class="tool-grid">
+          <fieldset class="tool-choice">
             <legend>Your guitar signal</legend>
             <div class="chip-options">
               <label class="chip-option"><input type="radio" name="source" value="file" checked> A DI recording</label>
@@ -82,7 +86,7 @@
             </div>
             <p class="filter-help" id="live-hint" hidden>Your browser will ask to use your audio input. Choose your audio interface.</p>
           </fieldset>
-          <fieldset class="cab-choice">
+          <fieldset class="tool-choice">
             <legend>What you hear</legend>
             <div class="chip-options">
               <label class="chip-option"><input type="radio" name="chain" value="pair" checked> Amp + cab IR</label>
@@ -101,34 +105,34 @@
           <button type="button" id="btn-compare" class="btn btn-secondary btn-small" disabled aria-describedby="compare-help">Measure the match</button>
         </div>
         <p id="listen-status" class="info" aria-live="polite"></p>
-        <p id="compare-help" class="filter-help">Measure the match needs a trained capture. It plays 20 seconds of the DI recording through the amp + IR and through the trained capture, and says how close they are.</p>
+        <p id="compare-help" class="filter-help">Measure the match needs the amp capture, the cabinet IR and a trained capture.</p>
       </section>
 
-      <section class="panel cab-section" aria-labelledby="train-title">
-        <div class="cab-step-head">
-          <span class="cab-step" aria-hidden="true">3</span>
+      <section class="panel tool-section" aria-labelledby="train-title">
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">3</span>
           <div>
             <h2 id="train-title"><span class="visually-hidden">Step 3: </span>Train on Kaggle</h2>
-            <p class="cab-lead">Kaggle's GPU learns the amp and the cab as one A2 capture, on your account and your free GPU hours.</p>
+            <p class="tool-lead">Kaggle's GPU learns the amp and the cab as one A2 capture, on your account and your free GPU hours.</p>
           </div>
         </div>
         {% if not training_ready %}
         <p class="notice">Training isn't set up on this site yet: the owner needs to say where to find NAM's training input (see README.md). You can still listen above.</p>
         {% endif %}
-        <form id="train-form" class="cab-train" novalidate>
-          <div class="cab-grid">
-            <fieldset class="cab-box">
+        <form id="train-form" class="tool-train" novalidate>
+          <div class="tool-grid">
+            <fieldset class="tool-box">
               <legend>Your Kaggle account</legend>
               <label class="field">Username <input name="username" id="kaggle-username" autocomplete="username" spellcheck="false" aria-required="true"></label>
               <label class="field">API key or token <input name="key" id="kaggle-key" type="password" autocomplete="off" spellcheck="false" aria-required="true" aria-describedby="key-help"></label>
               <p class="filter-help" id="key-help">Create one on Kaggle under <a href="https://www.kaggle.com/settings" target="_blank" rel="noopener">Settings → API</a>. Your account must be phone-verified to use GPUs.</p>
               <label class="checkbox-row"><input type="checkbox" id="kaggle-remember"> Remember on this device</label>
-              <div class="cab-row">
+              <div class="tool-row">
                 <button type="button" id="btn-check" class="btn btn-secondary btn-small">Check my account</button>
                 <p id="check-status" class="info" aria-live="polite"></p>
               </div>
             </fieldset>
-            <fieldset class="cab-box">
+            <fieldset class="tool-box">
               <legend>The new capture</legend>
               <label class="field">Name <input name="name" id="model-name" maxlength="100" placeholder="Capture + cab"></label>
               <label class="field">Training quality
@@ -142,7 +146,7 @@
             </fieldset>
           </div>
           <p class="settings-privacy"><strong>Your Kaggle key stays private.</strong> It's saved only in this browser and sent securely with each request to this site's server, which uses it for that one request and forgets it. This page has no ads or third-party scripts. A Kaggle key can manage your whole Kaggle account, so delete it on Kaggle when you no longer need it.</p>
-          <details class="cab-explain">
+          <details class="tool-explain">
             <summary>What happens when you train</summary>
             <ul>
               <li>This site sends your capture and IR to Kaggle as one private notebook on <strong>your</strong> account, with a T4 GPU and internet access (to install NAM's trainer). Nothing is kept on this server.</li>
@@ -152,22 +156,22 @@
             </ul>
           </details>
           <p id="train-status" class="t3ai-warning" role="alert" tabindex="-1" hidden></p>
-          <div class="cab-actions">
+          <div class="tool-actions">
             <button type="submit" id="btn-train" class="btn btn-primary"{% if not training_ready %} disabled{% endif %}>Start training</button>
           </div>
         </form>
       </section>
 
-      <section class="panel cab-section" aria-labelledby="jobs-title">
-        <div class="cab-step-head">
-          <span class="cab-step cab-step-done" aria-hidden="true">✓</span>
+      <section class="panel tool-section" aria-labelledby="jobs-title">
+        <div class="tool-step-head">
+          <span class="tool-step tool-step-done" aria-hidden="true">✓</span>
           <div>
             <h2 id="jobs-title">Your trainings</h2>
-            <p class="cab-lead">Listed only in this browser. The page checks on them every 30 seconds while it's open, so you can close it and come back.</p>
+            <p class="tool-lead">Listed only in this browser. The page checks on them every 30 seconds while it's open, so you can close it and come back.</p>
           </div>
         </div>
         <ul id="jobs" class="cab-jobs"></ul>
-        <p id="jobs-empty" class="cab-empty">No trainings yet.</p>
+        <p id="jobs-empty" class="tool-empty">No trainings yet.</p>
         <div class="file-pick file-pick-compact" data-state="empty">
           <input type="file" id="trained-file" class="file-pick-input" accept=".nam,application/json">
           <label for="trained-file" class="file-pick-target">

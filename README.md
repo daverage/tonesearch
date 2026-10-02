@@ -6,6 +6,8 @@ Describe a guitar or bass tone in plain words, and TONE Search finds [Neural Amp
 
 The AI explains the tone and the gear behind it (amps, pedals, guitars and pickups), gives practical tips, then searches TONE3000 and ranks the matching packs by how well they fit. You can open any pack to download its `.nam` files, or ask the AI which file suits rhythm or lead.
 
+It also has **NAM tools** that work in your browser: [File tools](#file-tools) inspects a capture, checks that it plays in Neural Amp Modeler's engine, and changes its output volume or credits, and [Cab embed](#cab-embed) bakes a cabinet IR into an amp capture, training the new file on your own free Kaggle account. Assistants such as Claude and ChatGPT can use TONE Search as a tool through [MCP](#use-it-from-your-ai-assistant-mcp).
+
 TONE Search is a small Flask app with no build step. It runs on a laptop or on ordinary shared hosting (cPanel / Passenger).
 
 ---
@@ -21,6 +23,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
 - [Using the app](#using-the-app)
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Research library](#research-library)
+- [File tools](#file-tools)
 - [Cab embed](#cab-embed)
   - [Setting up training](#setting-up-training)
 - [Saved answers and ratings](#saved-answers-and-ratings)
@@ -45,20 +48,23 @@ One search runs this pipeline on the server:
  your description
         │
         ▼
- 1. Web research (optional) ── DuckDuckGo: two searches (each in its own process), up to 8 pages read,
-        │                      the most relevant passages kept as notes, with the sentences that date or qualify them
+ 0. Saved answer? ──────────── the same tone (or another name for the same rig) answered in the last 30 days:
+        │                      shown instantly, with no AI, web or TONE3000 calls
         ▼
- 2. Tone plan (AI) ─────────── a summary of the tone, the gear behind it, tips,
-        │                      and 1–3 short TONE3000 search queries
+ 1. Web research (optional) ── the research library first; otherwise DuckDuckGo: two searches (each in its own
+        │                      process), up to 8 pages read, the most relevant passages kept as notes
         ▼
- 3. TONE3000 search ────────── each query is searched with your filters; results are de-duplicated
+ 2. Tone plan (AI) ─────────── a summary of the tone, the gear behind it, tips, and 1–3 short TONE3000 search
+        │                      queries; a saved plan for the same rig is reused instead
+        ▼
+ 3. TONE3000 search ────────── the queries run at the same time, with your filters; results are de-duplicated
         │
         ▼
  4. Shortlist ──────────────── sorted by catalogue score and cut to 12
         │                      (small models stop scoring partway through long lists)
         ▼
- 5. Ranking (AI) ───────────── every pack gets a 0–100 fit score and a one-line reason
-        │
+ 5. Ranking (AI) ───────────── each pack gets a 0–100 fit score and a one-line reason; packs already scored
+        │                      for this plan keep their score, so only new ones go to the AI
         ▼
  tone brief + ranked packs
 ```
@@ -67,6 +73,8 @@ One search runs this pipeline on the server:
 - **Refining:** you can refine in plain words ("more gain", "darker", "a cheaper amp"). The conversation so far is sent with each refinement.
 - **Filters:** changing filters or clicking a tag reuses the last plan and skips the AI planning step.
 - **Pack questions:** when you open a pack, the AI answers questions about it using the pack's description and file names, and can pin the files it recommends.
+- **Accuracy checks in code:** when there are research notes, gear the notes never name is labelled **alternative**, whatever the AI called it, and research you've approved on `/admin` leads the AI with your checked gear list. See [Research library](#research-library).
+- **Reuse:** saved answers, plans, research and scores make repeat searches instant or nearly so, and players' ratings decide which briefs are kept. See [Saved answers and ratings](#saved-answers-and-ratings).
 
 ### Working with many kinds of AI model
 
@@ -88,6 +96,7 @@ The AI code (`tonesearch/ai.py`) is built to cope with a wide range of models, i
   - **Cloudflare Workers AI:** has a free daily allowance. Setup is slightly technical.
   - **A local model with Ollama:** free and private, but needs a reasonably capable computer.
   - **Any OpenAI-compatible API:** for example OpenAI, OpenRouter, Groq, Together, or a vLLM/LM Studio server reachable over HTTPS.
+- **For cab embed training only:** NAM's official training input file, hosted where Kaggle can download it (see [Setting up training](#setting-up-training)). Visitors bring their own Kaggle account. File tools and the cab preview need nothing extra.
 
 ---
 
@@ -186,10 +195,13 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
    - make, tags, creator
    - calibrated/verified only
 5. **Export** saves the whole conversation, with the ranked packs, as a Markdown file. Your keys are never included.
+6. **Rate it.** Say whether the brief was right and mark packs **Good match** or **Not this**: it improves results for everyone.
+7. **NAM tools** (top of the page): [File tools](#file-tools) and [Cab embed](#cab-embed), for working on capture files.
+8. **Use it from your assistant:** Settings → **Use TONE Search from your AI assistant (MCP)** has ready-to-copy setup for Claude, ChatGPT, Cursor and others, on this site or installed yourself. See [the MCP section](#use-it-from-your-ai-assistant-mcp).
 
 **Keyboard and accessibility:**
 
-- The app aims to meet WCAG 2.2 AA, in light and dark mode. The website and admin pages pass an automated [axe-core](https://github.com/dequelabs/axe-core) check, and keyboard use, focus and reflow were tested in a browser.
+- The app aims to meet WCAG 2.2 AA, in light and dark mode. The website, admin and NAM tool pages pass an automated [axe-core](https://github.com/dequelabs/axe-core) check, and keyboard use, focus and reflow were tested in a browser.
 - Press Ctrl/Cmd+Enter in the search box to search. A skip link leads straight to it.
 - The filter suggestions work with the arrow keys and Enter, and Escape closes them, the filters and the dialogs.
 - Progress, results, replies and errors are announced to screen readers, each once. Messages say who wrote them ("You asked", "AI").
@@ -202,6 +214,8 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
 ## Use it from your AI assistant (MCP)
 
 TONE Search also runs as an [MCP](https://modelcontextprotocol.io) server, so assistants such as Claude, ChatGPT, Cursor and Claude Code can use it. Your assistant does the AI work: it plans the searches and ranks the packs. The server only fetches data and calls no AI provider.
+
+The website's **Settings** dialog has the same instructions under **Use TONE Search from your AI assistant (MCP)**, with the site's own address and your TONE3000 key filled into each snippet, ready to copy.
 
 There are two ways to use it:
 
@@ -336,15 +350,25 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 - **Deleting:** **Delete…** lists what will go before you confirm: the research, the saved answers, plans and rankings of every search that used it (including ones that found it under another name), and the votes on those searches. The next search for that tone starts from scratch.
 - **What research keeps:** pages are read with [trafilatura](https://trafilatura.readthedocs.io/), which drops menus, footers and ads (a simple built-in parser takes over if it's missing). Gear is recognised by its shape, such as a model number ("VH4", "JC-40") or a make's name, so new and obscure gear needs no list. Sentences that qualify a claim ("a modern equivalent", "not confirmed for this recording") are kept, with the sentence that dates the evidence ("recorded in 2006"). Pages that never mention an instrument or gear are skipped, as are video, social, preset and shop sites, and posters' own rigs on forums. Each source stays on its own line with its link, and a source taken from the search engine's summary is marked as such.
 - **Requests for gear that meets needs** ("a stereo combo for gigging that's a good pedal platform"): the AI lists the requirements first (shown in the brief as **What you asked for**), drops candidates that break a hard one, and rates the rest on the same scale as everything else. It is told to leave out pedals, speakers and guitars unless the request asks for them. Web research looks for specifications and reviews instead of an artist's rig, and a request that could be either (such as "AC30") searches one of each. When ranking packs, requirements about the physical box (combo or head, speakers, weight) are ignored: a capture is only the sound.
-- **Also known as:** when the AI plans a search it also lists, at no extra cost, the words later searches might use for the same thing: other names for an artist's rig (the player and nickname, band, song, album, era), and for every request other wordings of it ("edge of break-up blues" and "breakup blues" for "edge breakup blues"). These are saved with the research and the saved answer, so "Adam Getgood bass" finds the "Periphery bass" research and answer. Each other name is compared on its own, and words from two names are never combined, so "Nolly Getgood bass" doesn't match through "Nolly" and "Adam Getgood". At least two words must match, so "Periphery" alone doesn't, and a search that names more (an album it may not cover) doesn't either. Gear ("Telecaster", "Ibanez TQM2"), sound words, genres, bandmates and labels are not other names and are dropped; a player's own name in their signature gear stays. A saved brief is only reused when the new search doesn't describe a sound the saved one didn't; the research is still shared. A wording is kept only when at least half its words are the request's own, so a sound's research never gains an artist ("Jimi Hendrix blues"). Edit them on `/admin`; MCP assistants can add them with `save_gear`.
+- **Also known as:** when the AI plans a search it also lists, at no extra cost, the words later searches might use for the same thing: other names for an artist's rig (the player and nickname, band, song, album, era), and for every request other wordings of it ("edge of break-up blues" and "breakup blues" for "edge breakup blues"). These are saved with the research and the saved answer, so "Adam Getgood bass" finds the "Periphery bass" research and answer. Each other name is compared on its own, and words from two names are never combined, so "Nolly Getgood bass" doesn't match through "Nolly" and "Adam Getgood". An other name stands in for part of the topic, never all of it: "James Hetfield Black Album" and "Metallica 1991" find the Black Album research, but "James Hetfield" (his whole career) and "thrash metal" (a genre the notes mention) don't. Possessives are ignored, so "Metallica's" matches "Metallica", and a single word already in the request ("Black" for "Metallica's Black Album") isn't kept as an other name. At least two words must match, so "Periphery" alone doesn't, and a search that names more (an album it may not cover) doesn't either. Gear ("Telecaster", "Ibanez TQM2"), sound words, genres, bandmates and labels are not other names and are dropped; a player's own name in their signature gear stays. A saved brief is only reused when the new search doesn't describe a sound the saved one didn't; the research is still shared. A wording is kept only when at least half its words are the request's own, so a sound's research never gains an artist ("Jimi Hendrix blues"). Edit them on `/admin`; MCP assistants can add them with `save_gear`.
 - **Confidence:** every gear item is rated on one scale for every kind of request. **best** means documented for this recording, album or era, or meeting every requirement. **close** means the artist's gear from another or unknown era, or missing one requirement. **alternative** means a substitute, modern equivalent, different approach or guess. The brief labels each item, TONE3000 searches for alternatives come after the others, and ranking prefers captures of the best matches. Uncertain items are kept with a note in their role rather than dropped, and documented modelling rigs (an Axe-Fx or Kemper an artist actually uses) are treated like any other gear. Microphones are listed under **Mics** but never searched for on TONE3000: a capture is made *with* a mic, so searching a mic's name only finds speaker cabinets that were recorded with it. To make a DI or piezo guitar sound miked, the search looks for captures of the result instead, such as a classical guitar capture or an acoustic simulator. An item whose own description calls it an alternative is always labelled **alternative**. Gear without a level counts as **close**, and older entries' levels (confirmed, artist, suggested) are read as best, close and alternative. On the admin page, write gear lines as `kind | name | role | level`. An other name is kept when the research or the brief names it, or it shares a word with the request, so "Knights of Cydonia" gains "Muse" and "Matt Bellamy" from its research. A request for gear that meets needs gets wordings only ("stereo gigging combo"), never names like "Beatles".
 - **Reports:** visitors can press **Report wrong research** under the notes. A reported entry isn't reused until you review it, and it's listed first on the admin page with the reason.
 
 ---
 
+## File tools
+
+`/tools` (linked as **NAM tools** at the top of the main page) works on one `.nam` file entirely in the browser; the file is never uploaded. The logic is `static/nam-edit.js`, ported from NAM Mixer's NAM tools and tested with `node --test tests/js/*.test.mjs`.
+
+- **What's in it:** name, credits, gear and tone type, format (A1, A2 with its Full and Lite sizes, LSTM, Sequential stages), sample rate, size, how far back it looks (receptive field), the trainer's loudness, calibration levels, and whether it includes a cab.
+- **NAMCore check:** loads the file in NeuralAmpModelerCore (the wasm engine) and plays a fixed test signal through it, both sizes of an A2 file, and reports whether it plays, is silent or produces invalid numbers, or the engine's own error if it won't load.
+- **Output volume:** ±24 dB, for players and pedals without an output knob. Like NAM Mixer, it scales only the documented output scale (`head_scale` in the config and the last weight, which is the one NAMCore actually plays, for each A2 size) and the loudness metadata, and refuses files where those disagree or that have no known output scale (LSTM, for example). Players that normalise loudness play the result at the same level as before, and the page says so.
+- **Name and credits:** name, modeled by, gear make and model, and tone type. Gear type describes what was captured, so it's shown but not editable.
+- **Check and download:** every edit is compared with the original and refused unless exactly the expected values changed. The edited copy is then played in NAMCore next to the original; it's only downloaded if it sounds the same apart from the volume change. A +3 dB edit of a real A2 capture matched NAM Mixer's own edit value for value, and NAMCore's native renderer played it exactly 3.000 dB louder.
+
 ## Cab embed
 
-`/cab` (linked as **Cab embed** at the top of the main page) bakes a cabinet IR into an amp capture, so one `.nam` file plays the amp and the cab together in any NAM player that loads A2 captures, with no IR loader.
+`/cab` (linked from **NAM tools**) bakes a cabinet IR into an amp capture, so one `.nam` file plays the amp and the cab together in any NAM player that loads A2 captures, with no IR loader.
 
 1. **Choose files.** An amp capture (A1 WaveNet or A2, 48 kHz, without a cab) and a cabinet IR (`.wav`, up to 5 seconds). The page reads them in the browser and says what it found, including when a capture's metadata says it already has a cab, or when the IR is longer than an A2 model can hear.
 2. **Listen.** The page plays a DI recording, or live input from an audio interface, through the capture and the IR, using [neural-amp-modeler-wasm](https://github.com/tone-3000/neural-amp-modeler-wasm) (NeuralAmpModelerCore compiled to WebAssembly by TONE3000, copied into `static/vendor/nam-wasm/`). Nothing is uploaded. The IR is prepared the way training prepares it (mono average, leading silence trimmed at -40 dB, 48 kHz) and scaled to unit energy for listening, since many IRs add 15 to 20 dB. No DI clips are bundled: visitors use their own.
@@ -382,19 +406,23 @@ TONE Search saves its work so repeat searches are instant and cost nothing. Ever
 | Saved | Kept for | Reused when | Skips |
 |---|---|---|---|
 | TONE3000 search results | 1 day (`TONESEARCH_CATALOGUE_HOURS`) | Any visitor or MCP user makes the same catalogue search | TONE3000 requests |
-| The whole answer: brief, packs and ranking | 1 day, the same as search results, because it contains them | The same tone (same topic words, any order) with the same filters and research setting | The AI, web research and TONE3000 |
-| The AI's tone plan | 30 days (`TONESEARCH_AI_CACHE_DAYS`) | The same tone, whatever the filters | The planning AI call |
-| The AI's ranking | 30 days | The same tone and exactly the same packs | The ranking AI call |
+| The whole answer: brief, packs and ranking | 30 days (`TONESEARCH_ANSWER_DAYS`) | The same tone (same topic words, any order, or one of its other names) with the same filters and research setting | The AI, web research and TONE3000 |
+| The AI's tone plan (the brief) | 30 days (`TONESEARCH_AI_CACHE_DAYS`), and after that for as long as more players rate it good than bad | The same tone, whatever the filters, or the same rig asked another way when its research comes from the library and the request describes no sound the saved one didn't | The planning AI call |
+| The AI's pack scores | 30 days | Any search using the same plan: a pack scored once keeps its score, so only new packs are sent to the AI | The ranking AI call, or most of it |
 | Pack file lists and filter suggestions | 7 days | Anyone asks for the same pack or suggestion | TONE3000 requests |
 
-So after a day, a known tone costs a few quick TONE3000 searches and no AI. If a new pack has appeared, the AI ranks the new set once, and that ranking is then saved too.
+So for a month a known tone is instant, and after that it costs a few quick TONE3000 searches and no AI. If a new pack has appeared, only that pack is sent to the AI to be scored. The catalogue searches run at the same time.
 
-Only a first search uses saved answers; a refinement depends on the whole conversation. Answers with warnings, such as a skipped ranking, are never saved. A saved answer says so under the brief, with a **Search again** button that works it out from scratch. Saved answers don't count against the hourly search limit. Pack file lists are saved without their download links, which may expire.
+Only a first search uses saved answers; a refinement depends on the whole conversation. Answers with warnings, such as a skipped ranking, are never saved. A saved answer says so under the brief, with its date, the request it was made for when that was worded differently, how many players rated it good, and that packs added to TONE3000 since aren't included. **Search again** works it out from scratch and saves the new answer. Saved answers don't count against the hourly search limit. Pack file lists are saved without their download links, which may expire.
 
 **Ratings.** Visitors can say whether a tone brief was right, with an optional comment, and mark each pack **Good match** or **Not this**. MCP assistants can do the same with the `rate_result` tool. Each voter gets one vote per brief or pack, and voting again changes it. Voters are stored as a short salted hash, never as an IP address or key.
 
 - Pack ratings re-order results for that tone: each net vote moves a pack 8 fit points, up to 3 votes either way.
-- A "wrong" brief reports its research (as **Report wrong research** does) and clears that tone's saved answers.
+- A "wrong" brief reports its research (as **Report wrong research** does) and clears that tone's saved answers, unless more players rated that brief good.
+- Brief ratings count for the brief they were given on, under whichever wording showed it, and each player counts once per brief: a new brief for the same tone starts with none.
+- A brief more players rated good than bad is kept after its month: the same brief, with packs refreshed from TONE3000. **Search again** gives that visitor a new answer but doesn't replace the liked one for everybody else, and a bad rating doesn't clear it while it's still liked.
+- Research you approved stays approved when a visitor rates a brief wrong (on the website or through MCP): the brief is worked out again from it instead.
+- When you approve research on `/admin`, its gear list goes to the AI with the notes ("Gear checked by the site owner for this rig"), so your fixes reach every new brief for that rig. It's one line per approved entry: votes and comments are never added to prompts, so they don't grow over time.
 - Editing a research library entry on `/admin` clears that tone's saved answers. Deleting one also clears the saved answers of every search that used it and the votes on them.
 - `/admin` → **Activity** counts, per day, how many searches were answered from saved answers (directly or by alias) against worked out fresh, and how often research, plans, rankings and TONE3000 searches were reused against done again, for the website and MCP.
 - `/admin` → **Feedback** lists the topics with the most bad briefs, and recent votes with their comments. **Delete** removes a single vote, such as spam, and its effect on pack order.
@@ -468,6 +496,7 @@ Visitors using their own AI provider can set the same values under **Settings �
 | `TONESEARCH_LIBRARY_DAYS` | 30 | Days unreviewed library research is reused before it's searched again |
 | `TONESEARCH_CATALOGUE_HOURS` | 24 | Hours TONE3000 search results and whole answers are reused |
 | `TONESEARCH_AI_CACHE_DAYS` | 30 | Days the AI's plans and rankings are reused |
+| `TONESEARCH_ANSWER_DAYS` | 30 | Days a whole saved answer is shown instantly. After this, a brief players rated good is kept with fresh packs |
 | `TONESEARCH_FEEDBACK_SALT` | built in | Salt for hashing voters; set your own secret value |
 | `TONESEARCH_MCP_CALLS_PER_HOUR` | 120 | Hosted MCP tool calls per IP per hour (0 = no limit) |
 | `TONESEARCH_MCP_RESEARCH_PER_HOUR` | same as searches | Hosted MCP `web_research` calls per IP per hour |
@@ -523,14 +552,16 @@ For Ollama, small models such as `gemma4:e4b` work, but give thinner gear lists 
 2. Set the **startup file** to `passenger_wsgi.py` and the **entry point** to `application`.
 3. Upload the repository, then install the requirements from the app's virtual environment: `pip install -r requirements.txt`. Upgrade pip first (`pip install --upgrade pip`) so trafilatura's `lxml` installs ready-built instead of compiling.
 4. Add the environment variables from the [Configuration reference](#configuration-reference) in the app's settings.
-5. Restart the app after every upload.
+5. For cab embed training, upload NAM's `v3_0_0.wav` to the app's `static/` folder (it's gitignored, so it's never committed) and set `TONESEARCH_NAM_INPUT_URL` to its address, such as `https://example.com/tonesearch/static/v3_0_0.wav`. See [Setting up training](#setting-up-training).
+6. Restart the app after every upload.
 
-Serving under a sub-path such as `example.com/tonesearch` works: the page sets its own `<base href>`. Links to the CSS and JavaScript carry a version number based on when the files last changed, so browsers and Cloudflare fetch fresh copies after a restart.
+Serving under a sub-path such as `example.com/tonesearch` works: the page sets its own `<base href>`. The CSS and JavaScript are linked under a versioned path (`static/v<version>/style.css`), where the version changes whenever a static file does, so browsers and Cloudflare fetch fresh copies after a restart. It's in the path rather than a `?v=` query because Cloudflare can be set to ignore query strings, and then serves the old file.
 
 ### Behind Cloudflare
 
 - Cloudflare's proxy ends requests after about 100 seconds. Keep `TONESEARCH_REQUEST_BUDGET_SECONDS` below that (the default is 85).
 - Upstream failures return HTTP **503**, not 502, because Cloudflare replaces the body of a 502 with its own error page. That would hide the app's error message.
+- Static files are served with a one-year cache under their versioned path, so they don't depend on Cloudflare's caching level. Purging Cloudflare's cache once after upgrading from an older version clears copies cached under the old addresses.
 
 ### Ads
 
@@ -566,12 +597,13 @@ Ads are off by default. Set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID
 pip install -r requirements-dev.txt
 pytest                                   # all tests
 pytest tests/test_app.py::test_name      # one test
+node --test tests/js/*.test.mjs          # the file tools' edit logic (static/nam-edit.js); needs Node 18+
 FLASK_DEBUG=1 python3 app.py             # auto-reload while editing
 python3 scripts/eval_research.py         # web research on real searches; --compare BEFORE.json AFTER.json
 python3 scripts/eval_plans.py            # tone plans from your configured AI on saved research (--refresh)
 ```
 
-The unit tests check what the Python code does to research and plans. The two eval scripts check what the web and the AI actually return, which changes from run to run, so they report rather than pass or fail. Run them before and after changing the research code or the AI prompts. Their results go to `data/eval/`.
+The unit tests check what the Python code does to research and plans; none of them touch the network. The cab embed's Kaggle script can also be run locally: see [Setting up training](#setting-up-training). The two eval scripts check what the web and the AI actually return, which changes from run to run, so they report rather than pass or fail. Run them before and after changing the research code or the AI prompts. Their results go to `data/eval/`.
 
 **Project layout:**
 
@@ -592,8 +624,12 @@ tonesearch/kaggle.py    Kaggle's web API with the visitor's credentials
 templates/index.html    The single page
 templates/admin.html    The owner's review pages
 templates/cab.html      The cab embed page (no ads)
+templates/tools.html    The file tools page (no ads)
 static/app.js           Front end (no build step)
 static/cab.js           The cab embed page's script (an ES module)
+static/tools.js         The file tools page's script
+static/nam-edit.js      Inspecting and editing .nam files (no DOM; tested in tests/js)
+static/tool-ui.js       Shared file pickers and NAMCore rendering for the tool pages
 static/vendor/nam-wasm/ NeuralAmpModelerCore in WebAssembly (neural-amp-modeler-wasm 2.0.1)
 static/style.css        Styles (light and dark)
 tests/                  Tests; they never touch the network
@@ -621,14 +657,19 @@ scripts/                Eval scripts, their saved research notes, and reset_data
 | The local server stops responding (even the home page) | Older versions could freeze during web research on macOS (a bug in the `ddgs` search library's HTTP client). Update to the latest code, then stop the frozen server with `kill -9 <pid>` (Ctrl+C can't stop it) and start it again. |
 | "Web research unavailable" | Install the requirements (`ddgs`, `trafilatura`). DuckDuckGo may also be rate-limiting; searches still work without research. |
 | Research notes look like menus or page clutter | trafilatura isn't installed, so the simple parser is reading pages: run `pip install -r requirements.txt` and restart. The log says "trafilatura is not installed" once when this happens. |
-| Changes don't show after deploying | Restart the app, then hard-refresh (Cmd/Ctrl+Shift+R). |
+| Changes don't show after deploying | Restart the app, then hard-refresh (Cmd/Ctrl+Shift+R). After upgrading from a version that linked files with `?v=`, purge Cloudflare's cache once. |
+| Cab embed: "Training isn't set up on this site yet" | Set `TONESEARCH_NAM_INPUT_URL` (or `TONESEARCH_NAM_INPUT_DATASET`) and restart the app. Open the URL in a browser: it should download a 26 MB file. |
+| Cab embed: Kaggle didn't accept the credentials | Check the Kaggle username and API key or `KGAT_` token. Kaggle also needs a phone-verified account for GPUs and internet access. |
+| Cab embed: the training failed | Open the job on Kaggle to read its log. The page shows the script's own message, such as a missing GPU quota or NAM's trainer refusing the data. |
+| File tools or the cab preview say AudioWorklet isn't available | The browser engine needs a secure page: use `https://`, or `localhost` when running it yourself. |
 
 ---
 
 ## Credits and disclaimers
 
 - **Captures belong to their creators.** Every pack, file and image comes from [TONE3000](https://www.tone3000.com/) and is used under its creator's licence, which is shown on each pack. Check the licence before using a capture in your own work.
-- **Not affiliated.** TONE Search is an independent project. It is not affiliated with or endorsed by TONE3000, Neural Amp Modeler, Cloudflare, or any artist, band or gear maker mentioned. Product names, trademarks and artist names belong to their owners and are used only to describe tones.
+- **Neural Amp Modeler in the browser** comes from TONE3000's [neural-amp-modeler-wasm](https://github.com/tone-3000/neural-amp-modeler-wasm) (ISC licence), copied into `static/vendor/nam-wasm/`. The file tools' edits and the cab embed method follow NAM Mixer's NAM tools, and training uses [neural-amp-modeler](https://github.com/sdatkinson/neural-amp-modeler).
+- **Not affiliated.** TONE Search is an independent project. It is not affiliated with or endorsed by TONE3000, Neural Amp Modeler, Kaggle, Cloudflare, or any artist, band or gear maker mentioned. Product names, trademarks and artist names belong to their owners and are used only to describe tones.
 - **AI can be wrong.** Tone briefs, gear lists, tips and fit scores are AI suggestions, not facts. Trust your ears.
 - **No warranty.** The software is provided as is, without warranty of any kind.
 

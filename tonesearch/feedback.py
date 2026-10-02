@@ -6,12 +6,14 @@ of an IP address or MCP key, never the value itself.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
+from tonesearch import ai, cache, knowledge
 from tonesearch import db as database
 
 TARGETS = ("brief", "pack")
@@ -30,6 +32,10 @@ def _setup(connection: sqlite3.Connection) -> None:
         pack_title TEXT NOT NULL DEFAULT '', vote INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '',
         entry_id INTEGER, source TEXT NOT NULL DEFAULT 'web',
         UNIQUE (voter, words, target, pack_id))""")
+    # Brief votes name the brief they were cast on (brief_id), so they count together whichever wording showed it.
+    if "brief" not in {row[1] for row in connection.execute("PRAGMA table_info(feedback)")}:
+        connection.execute("ALTER TABLE feedback ADD COLUMN brief TEXT NOT NULL DEFAULT ''")
+    connection.execute("CREATE INDEX IF NOT EXISTS feedback_brief ON feedback (brief)")
 
 
 def _connect(db: Path):
@@ -37,17 +43,76 @@ def _connect(db: Path):
 
 
 def record(db: Path, *, voter_id: str, words: str, prompt: str, target: str, vote: int, pack_id: int = 0,
-           pack_title: str = "", comment: str = "", entry_id: int | None = None, source: str = "web") -> None:
+           pack_title: str = "", comment: str = "", entry_id: int | None = None, source: str = "web",
+           brief: str = "") -> None:
     if target not in TARGETS or vote not in (1, -1) or source not in SOURCES or not words:
         raise ValueError("invalid feedback")
     with _connect(db) as connection:
         connection.execute(
             "INSERT INTO feedback (created, voter, words, prompt, target, pack_id, pack_title, vote, comment,"
-            " entry_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " entry_id, source, brief) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (voter, words, target, pack_id) DO UPDATE SET created = excluded.created,"
-            " vote = excluded.vote, comment = excluded.comment, prompt = excluded.prompt",
+            " vote = excluded.vote, comment = excluded.comment, prompt = excluded.prompt, brief = excluded.brief",
             (time.time(), voter_id, words, prompt[:600], target, pack_id if target == "pack" else 0,
-             pack_title[:200], vote, comment.strip()[:500], entry_id, source))
+             pack_title[:200], vote, comment.strip()[:500], entry_id, source, brief if target == "brief" else ""))
+
+
+def brief_id(plan) -> str:
+    """Names a brief by its content, so votes, liked status and pack scores belong to that brief whichever wording
+    of the request showed it, and a new brief for the same tone starts unrated. '' for no plan."""
+    if not isinstance(plan, dict):
+        return ""
+    content = {k: plan.get(k) for k in ("summary", "search_queries", "requirements")}
+    content["gear"] = [(g.get("name"), g.get("confidence")) for g in plan.get("gear") or [] if isinstance(g, dict)]
+    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:20]
+
+
+def brief_votes(db: Path, brief: str) -> tuple[int, int]:
+    """(good, bad) ratings of one brief, counting each voter once (their latest vote, under any wording).
+    (0, 0) when the database is unavailable or there's no brief."""
+    if not brief:
+        return 0, 0
+    try:
+        with _connect(db) as connection:
+            row = connection.execute(
+                "SELECT SUM(vote = 1), SUM(vote = -1) FROM feedback f WHERE target = 'brief' AND brief = ? AND created = "
+                "(SELECT MAX(created) FROM feedback WHERE target = 'brief' AND brief = f.brief AND voter = f.voter)",
+                (brief,)).fetchone()
+            return int(row[0] or 0), int(row[1] or 0)
+    except sqlite3.Error as exc:
+        print(f"Feedback unavailable: {exc}", file=sys.stderr)
+        return 0, 0
+
+
+def liked(db: Path, plan) -> bool:
+    """True when more players rated this brief good than bad."""
+    good, bad = brief_votes(db, brief_id(plan))
+    return good > bad
+
+
+def saved_plans(db: Path, words_list) -> list[dict]:
+    """The saved plans for these topics (with and without web research)."""
+    plans = []
+    for words in dict.fromkeys(w for w in words_list if w):
+        for use_web in (True, False):
+            plan = cache.get(db, f"plan:{words}:{use_web}:p{ai.PLAN_VERSION}", float("inf"))
+            if isinstance(plan, dict):
+                plans.append(plan)
+    return plans
+
+
+def bad_brief(db: Path, words_list, entry: dict | None, reason: str) -> bool:
+    """A player says a brief is wrong (website or MCP). Unless more players liked it, the saved answers, plans and
+    pack scores of these topics (the request's, and the one the brief was saved under) are cleared so the next search
+    works it out again, and the research is flagged for review. Research the owner approved stays approved: one
+    visitor doesn't undo that. True when the brief was cleared."""
+    if any(liked(db, plan) for plan in saved_plans(db, words_list)):
+        return False
+    if entry and entry.get("status") != "approved":
+        knowledge.flag(db, entry["id"], reason)
+    for words in dict.fromkeys(w for w in words_list if w):
+        cache.forget_topic(db, words)
+    return True
 
 
 def pack_votes(db: Path, words: str) -> dict:

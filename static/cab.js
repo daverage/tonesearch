@@ -1,10 +1,8 @@
 // TONE Search cab embed page: preview a capture + IR in the browser, train them as one model on Kaggle.
 // Audio runs through NeuralAmpModelerCore compiled to WebAssembly (static/vendor/nam-wasm), so files are
 // only uploaded when the visitor starts a training, and then only to their own Kaggle account.
-import { NamEngine } from "./vendor/nam-wasm/index.js";
+import { $, ASSETS, NamEngine, RATE, announce, downloadBlob, el, enableDrop, picked, setInfo } from "./tool-ui.js";
 
-const ASSETS = { assetBaseUrl: new URL("./vendor/nam-wasm/", import.meta.url) };
-const RATE = 48000; // NAM captures and the training input run at 48 kHz
 const IR_TRIM_DB = -40; // leading silence trimmed like the trainer (cab_kernel.LEADING_SILENCE_THRESHOLD_DB)
 const COMPARE_SECONDS = 20;
 const COMPARE_SKIP = 4096; // the engine fades in for 1024 frames after a model loads
@@ -12,17 +10,6 @@ const POLL_MS = 30_000;
 const FINISHED = new Set(["complete", "error", "cancel_acknowledged"]);
 const JOBS_KEY = "tonesearch-cab-jobs";
 const CREDS_KEY = "tonesearch-cab-kaggle";
-
-const $ = (id) => document.getElementById(id);
-const announcer = $("announcer");
-const announce = (text) => { announcer.textContent = ""; setTimeout(() => { announcer.textContent = text; }, 50); };
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined && text !== null) node.textContent = text;
-  return node;
-};
-const setInfo = (node, text, isError = false) => { node.textContent = text || ""; node.classList.toggle("is-error", isError); };
 
 const files = { nam: null, ir: null, di: null, trained: null };
 
@@ -44,29 +31,6 @@ function describeCapture(json) {
   return { name: (typeof meta.name === "string" && meta.name.trim()) || null, kind, trainable, notes };
 }
 
-// The picker card shows the chosen file's name and whether it can be used.
-function picked(inputId, file, state) {
-  const card = $(inputId).closest(".file-pick");
-  card.dataset.state = file ? state : "empty";
-  const name = card.querySelector(".file-pick-name");
-  if (!name.dataset.empty) name.dataset.empty = name.textContent;
-  name.textContent = file ? file.name : name.dataset.empty;
-}
-
-// Files can be dropped on a picker card as well as chosen.
-document.querySelectorAll(".file-pick").forEach((card) => {
-  const input = card.querySelector(".file-pick-input");
-  card.addEventListener("dragover", (event) => { event.preventDefault(); card.classList.add("is-dragging"); });
-  card.addEventListener("dragleave", () => card.classList.remove("is-dragging"));
-  card.addEventListener("drop", (event) => {
-    event.preventDefault();
-    card.classList.remove("is-dragging");
-    if (!event.dataTransfer.files.length) return;
-    input.files = event.dataTransfer.files;
-    input.dispatchEvent(new Event("change"));
-  });
-});
-
 $("nam-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   files.nam = null;
@@ -81,6 +45,7 @@ $("nam-file").addEventListener("change", async (event) => {
     picked("nam-file", file, info.trainable ? "ok" : "error");
     suggestName();
     player.modelChanged("capture");
+    updateCompare();
   } catch (error) {
     picked("nam-file", file, "error");
     setInfo($("nam-info"), `That file isn't a NAM capture (${error.message}).`, true);
@@ -118,6 +83,7 @@ $("ir-file").addEventListener("change", async (event) => {
     setInfo($("ir-info"), `${(prepared.seconds * 1000).toFixed(0)} ms · ${prepared.channels === 1 ? "mono" : `${prepared.channels} channels, averaged to mono`}.${long}`);
     suggestName();
     player.modelChanged("ir");
+    updateCompare();
   } catch (error) {
     picked("ir-file", file, "error");
     setInfo($("ir-info"), `That IR can't be read (${error.message}). Use a WAV file.`, true);
@@ -304,8 +270,35 @@ $("out-level").addEventListener("input", (event) => {
 
 // ---- Measuring the match -----------------------------------------------------------------------------
 
+// Measuring needs the capture, the IR and a trained capture. A DI recording is used when there is one;
+// otherwise a built-in test signal is.
 function updateCompare() {
-  $("btn-compare").disabled = !(files.trained && files.nam && files.ir && files.di);
+  const missing = [];
+  if (!files.nam) missing.push("the amp capture");
+  if (!files.ir) missing.push("the cabinet IR");
+  if (!files.trained) missing.push("a trained capture (from Your trainings below)");
+  $("btn-compare").disabled = missing.length > 0;
+  const signal = files.di ? "20 seconds of your DI recording" : "a built-in test signal (load a DI recording to use real playing instead)";
+  $("compare-help").textContent = missing.length
+    ? `Measure the match still needs ${missing.join(", ").replace(/, ([^,]*)$/, " and $1")}.`
+    : `Measure the match plays ${signal} through the amp + IR and through the trained capture, and says how close they are.`;
+}
+
+// Ten seconds of noise rising from quiet to loud, low-passed to sit roughly where a guitar does, so the
+// comparison covers clean and driven playing without needing a recording.
+function testSignal(context) {
+  const length = 10 * RATE;
+  const buffer = context.createBuffer(1, length, RATE);
+  const data = buffer.getChannelData(0);
+  const levels = [-30, -20, -12, -6];
+  let seed = 0x4e414d, low = 0;
+  const alpha = 1 - Math.exp(-2 * Math.PI * 2000 / RATE);
+  for (let i = 0; i < length; i++) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    low += alpha * ((seed / 2 ** 32) * 2 - 1 - low);
+    data[i] = low * 3 * 10 ** (levels[Math.floor((i / length) * levels.length)] / 20);
+  }
+  return buffer;
 }
 
 async function renderOffline(text, withIr, length, diBuffer) {
@@ -349,7 +342,7 @@ $("btn-compare").addEventListener("click", async () => {
   setInfo($("listen-status"), "Rendering both versions…");
   try {
     const decoder = new OfflineAudioContext(1, 1, RATE);
-    const full = await decodeDi(decoder);
+    const full = files.di ? await decodeDi(decoder) : testSignal(decoder);
     const length = Math.min(full.length, COMPARE_SECONDS * RATE);
     if (length <= COMPARE_SKIP * 4) throw new Error("The DI recording is too short to compare.");
     const reference = await renderOffline(files.nam.text, true, length, full);
@@ -358,7 +351,7 @@ $("btn-compare").addEventListener("click", async () => {
     if (!result) throw new Error("One of the versions was silent.");
     const level = Math.abs(result.levelDb) < 0.5 ? "at the same level"
       : `${Math.abs(result.levelDb).toFixed(1)} dB ${result.levelDb > 0 ? "quieter" : "louder"} than the pair`;
-    const text = `Error-to-signal ratio ${result.esr.toFixed(4)} once levels are matched (lower is closer; around 0.01 or less is a very close match). The trained model plays ${level}.`;
+    const text = `${files.di ? "With your DI recording" : "With the built-in test signal"}: error-to-signal ratio ${result.esr.toFixed(4)} once levels are matched (lower is closer; around 0.01 or less is a very close match). The trained model plays ${level}${level === "at the same level" ? "" : ". That's expected: this comparison applies the IR exactly as it is, and training lowers loud targets to avoid clipping. Players set the level from the file's loudness"}.`;
     setInfo($("listen-status"), text);
     announce(text);
   } catch (error) {
@@ -520,13 +513,7 @@ async function downloadJob(job, button) {
     }
     const blob = await response.blob();
     const name = (job.result && job.result.filename) || `${job.name}.nam`;
-    const link = el("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = name;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+    downloadBlob(blob, name);
     loadTrained(name, await blob.text());
     announce(`Downloaded ${name}. It's also loaded under Listen as the trained model.`);
   } catch (error) {
@@ -593,6 +580,8 @@ loadCreds();
 renderJobs();
 syncButtons();
 showSource();
+updateCompare();
+enableDrop();
 pollJobs();
 setInterval(pollJobs, POLL_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollJobs(); });

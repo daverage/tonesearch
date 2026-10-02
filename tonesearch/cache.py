@@ -21,6 +21,10 @@ from tonesearch import db as database
 
 CATALOGUE_SECONDS = float(os.environ.get("TONESEARCH_CATALOGUE_HOURS", "24")) * 3600
 AI_SECONDS = float(os.environ.get("TONESEARCH_AI_CACHE_DAYS", "30")) * 86400
+# How long a whole saved answer is shown instantly to a matching first search. Its packs can be this old: the page
+# says when it was made and offers "Search again". After this, a brief players rated good is kept as a plan and its
+# packs are refreshed from TONE3000 (see app._saved_plan).
+ANSWER_SECONDS = float(os.environ.get("TONESEARCH_ANSWER_DAYS", "30")) * 86400
 REFERENCE_SECONDS = 7 * 86400
 _LONGEST = max(CATALOGUE_SECONDS, AI_SECONDS, REFERENCE_SECONDS)  # rows older than this are never read again
 

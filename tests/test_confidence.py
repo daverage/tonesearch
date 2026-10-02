@@ -217,7 +217,8 @@ def test_aliases_drop_the_plans_own_gear_but_keep_signature_names():
         "search_queries": [], "aliases": ["Nolly", "Periphery", "Adam Getgood", "Juggernaut", "Periphery II",
                                           "Select Difficulty"],
         "gear": [{"kind": "guitar", "name": "Dingwall NG-3 Nolly Signature"}]})
-    assert nolly["aliases"] == ["Nolly", "Periphery", "Adam Getgood", "Juggernaut", "Periphery II"]  # at most 5
+    # At most 5, and not "Periphery" alone: it's one of the request's own words, so it could never help a match.
+    assert nolly["aliases"] == ["Nolly", "Adam Getgood", "Juggernaut", "Periphery II", "Select Difficulty"]
 
 
 def test_aliases_drop_gear_categories_and_keep_the_players_name_in_their_own_gear():
@@ -273,3 +274,53 @@ def test_other_names_the_evidence_supports_are_kept_without_repeating_the_reques
     nolly = _recommend("Periphery bass", {"summary": "Nolly's Darkglass tone.", "advice": [], "search_queries": [],
                                           "aliases": ["Nolly", "Adam Getgood"], "gear": []})
     assert nolly["aliases"] == ["Nolly"]  # the plan names Nolly; nothing names Adam Getgood
+
+
+_BLACK_ALBUM = ("- The Gear Used on Metallica's Black Album: Hetfield already owned at least three ESP MX models [220 and a "
+                "250]. Bob Rock also had a Jose-modded Marshall and Hetfield was able to use that for the recording of The "
+                "Black Album to accompany the Boogie Mark II. It is not known for sure if Kirk used a Tubescreamer. "
+                "(https://guitar.example)")
+
+
+def test_named_in_reads_names_the_way_sources_write_them():
+    assert ai.named_in("ESP MX220", _BLACK_ALBUM)  # "ESP MX models [220 and a 250]"
+    assert ai.named_in("Mesa Boogie Mark II", _BLACK_ALBUM)  # "Boogie Mark II", without the maker
+    assert ai.named_in("Ibanez Tube Screamer", _BLACK_ALBUM)  # "Tubescreamer", run together
+    assert ai.named_in("Jose-modded Marshall", _BLACK_ALBUM)
+    assert not ai.named_in("Marshall JCM800", _BLACK_ALBUM)  # one shared word is a different Marshall
+    assert not ai.named_in("Fender Twin Reverb", _BLACK_ALBUM)
+
+
+def test_gear_the_research_never_names_is_an_alternative():
+    body = {"summary": "s", "advice": [], "search_queries": ["Mesa Boogie Mark II"], "gear": [
+        {"kind": "amp", "name": "Marshall JCM800", "role": "Primary amplifier", "confidence": "close"},
+        {"kind": "amp", "name": "Mesa Boogie Mark II", "role": "Hetfield's rhythm amp", "confidence": "best"},
+        {"kind": "guitar", "name": "ESP MX220", "role": "Hetfield's guitar", "confidence": "best"}]}
+    plan = ai.plan_tone("guitar metallica's black album", research_notes=_BLACK_ALBUM, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    levels = {g["name"]: (g["confidence"], g["role"]) for g in plan["gear"]}
+    assert levels["Marshall JCM800"] == ("alternative", "Primary amplifier (not named in the research)")
+    assert levels["Mesa Boogie Mark II"][0] == "best" and levels["ESP MX220"][0] == "best"
+    assert plan["search_queries"][0] == "Mesa Boogie Mark II"  # the documented amp is searched before the stand-in
+
+
+def test_without_research_or_for_needs_the_models_labels_stand():
+    body = {"summary": "s", "advice": [], "search_queries": [], "gear": [
+        {"kind": "amp", "name": "Marshall JCM800", "role": "the classic", "confidence": "best"}]}
+    reply = lambda req, timeout: _Response({"choices": [{"message": {"content": json.dumps(body)}}]})
+    assert ai.plan_tone("tight 80s metal", opener=reply)["gear"][0]["confidence"] == "best"
+    needs = {**body, "requirements": ["loud enough to gig"]}
+    plan = ai.plan_tone("a loud head for gigging", research_notes=_BLACK_ALBUM, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(needs)}}]}))
+    assert plan["gear"][0]["confidence"] == "best"
+
+
+def test_a_syndicated_copy_of_a_source_is_skipped():
+    article = ("Hetfield used a Jose-modded Marshall with his Mesa Boogie Mark II amp on the Black Album, and an ESP "
+               "MX220 guitar.")
+    results = [{"href": f"https://{site}/black-album", "title": site, "body": ""} for site in ("a.example", "b.example", "c.example")]
+    pages = {"a.example": article, "b.example": "Pictured on stage in 1989. " + article,
+             "c.example": "Kirk Hammett played a Gibson Les Paul Deluxe through a Marshall amp for the Black Album leads."}
+    notes = research.web_notes("metallica black album", search=lambda q, n, **k: results,
+                               evidence=lambda href, topic: pages[href.split("/")[2]])
+    assert [line.split(":")[0] for line in notes.splitlines()] == ["- a.example", "- c.example"]

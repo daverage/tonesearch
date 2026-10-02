@@ -5,6 +5,7 @@ cPanel:     passenger_wsgi.py imports `application` from here (see README.md).
 """
 from __future__ import annotations
 
+import contextvars
 import hmac
 import json
 import os
@@ -12,6 +13,7 @@ import re
 import sqlite3
 import time
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlparse
 
@@ -262,6 +264,9 @@ ACTIVITY_EVENTS = (
     ("research_library", "Research taken from the library"),
     ("research_web", "Research searched on the web"),
     ("plan_saved", "Tone plans reused"),
+    ("plan_saved_alias", "…the plan saved with the same research, asked another way"),
+    ("plan_kept_liked", "Liked briefs kept past their month, with packs refreshed"),
+    ("plan_kept_liked_alias", "…found through the same research, asked another way"),
     ("plan_ai", "Tone plans asked of the AI"),
     ("rank_saved", "Rankings reused"),
     ("rank_ai", "Rankings asked of the AI"),
@@ -415,7 +420,8 @@ def _back_to_admin(message: str, **keep: str):
 def index():
     local = ai.local_model()
     return render_template("index.html", ai_ready=ai.is_configured(), ai_local=local,
-                           searches_per_hour=0 if local else LIMITS["search"])
+                           searches_per_hour=0 if local else LIMITS["search"],
+                           mcp_calls_per_hour=LIMITS["mcp"], mcp_research_per_hour=LIMITS["mcp_research"])
 
 
 @app.post("/api/search")
@@ -445,14 +451,18 @@ def api_search():
     result_suffix = f":{use_web}:{json.dumps(filters, sort_keys=True)}:p{ai.PLAN_VERSION}"
     result_key = f"result:{words}{result_suffix}"
     if reusable and not fresh:
-        saved = cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
+        saved = cache.get(_library(), result_key, cache.ANSWER_SECONDS)
         how = "answer_saved"
         if not saved:
             saved, how = _saved_answer_by_alias(prompt, result_suffix), "answer_saved_alias"
         if saved:
             cache.count(_library(), how)
-            feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
-            return jsonify({**saved, "cached": True})  # no AI, web or TONE3000 calls, so no hourly limit spent
+            saved_words = " ".join(knowledge.topic_words(saved.get("topic") or "")) or words
+            feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), saved_words))
+            brief = feedback.brief_id(saved.get("plan"))
+            # No AI, web or TONE3000 calls, so no hourly limit spent
+            return jsonify({**saved, "cached": True, "brief_id": brief,
+                            "rated_good": feedback.brief_votes(_library(), brief)[0]})
 
     if not _brings_own("provider", "api_key", "tone3000_api_key") and _over_limit("search"):
         return _limited()
@@ -463,11 +473,14 @@ def api_search():
     research = ""
     library = None  # the research library entry this search used or created
     fresh_research = False
+    planning_notes = ""  # what the AI plans from: the research, led by the owner's checked gear when there is some
     if use_web and plan is None:
         library = knowledge.find(_library(), topic if history else prompt)
         if library:
             research = library["notes"]
             cache.count(_library(), "research_library")
+            if library["status"] == "approved" and library["gear"]:
+                planning_notes = _checked_gear_line(library["gear"]) + "\n"
         else:
             try:
                 cache.count(_library(), "research_web")
@@ -476,16 +489,25 @@ def api_search():
             except RuntimeError as exc:
                 warnings.append(f"Web research unavailable: {exc}")
     plan_key = f"plan:{words}:{use_web}:p{ai.PLAN_VERSION}"
+    # "Search again" works out a new answer for this visitor, but a brief other players rated good stays the one
+    # everybody else gets: it isn't overwritten.
+    keep_shared = fresh and reusable and feedback.liked(_library(), cache.get(_library(), plan_key, float("inf")))
     if plan is None and reusable and not fresh and not fresh_research:
-        plan = cache.get(_library(), plan_key, cache.AI_SECONDS)
+        plan, how = _saved_plan(plan_key)
+        if not plan and library and library["words"] != words and knowledge.match_score(
+                prompt, library["words"], library.get("aliases") or "", same_sound=True):
+            # The same rig asked another way, describing no sound the saved request didn't: its plan still fits.
+            plan, how = _saved_plan(f"plan:{library['words']}:{use_web}:p{ai.PLAN_VERSION}")
+            how = how and f"{how}_alias"
         if plan:
-            cache.count(_library(), "plan_saved")
+            cache.count(_library(), how)
     try:
         if plan is None:
             cache.count(_library(), "plan_ai")
-            plan = ai.plan_tone(prompt, research_notes=research, history=history,
+            plan = ai.plan_tone(prompt, research_notes=planning_notes + research, history=history,
                                 deadline=deadline - RANKING_RESERVE_SECONDS)
-            if reusable:
+            plan["words"] = words  # the topic it's saved under: a bad rating clears it there, whatever was asked
+            if reusable and not keep_shared:
                 cache.put(_library(), plan_key, plan, words)
     except ai.AiError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
@@ -503,38 +525,49 @@ def api_search():
     rank_query = " ".join(queries)
     packs: list = []
     seen: set = set()
-    for query_index, query in enumerate(queries):
+
+    def catalogue(query):
         try:
-            for match in tone3000_search(query, filters=filters, rank_query=rank_query, cache_db=_library()):
-                if match["id"] not in seen:
-                    seen.add(match["id"])
-                    # Interleave the searches in TONE3000's own order: first of each, then second of each...
-                    packs.append({**match, "query": query, "catalog_order": match.get("catalog_rank", 99) * 10 + query_index})
+            return tone3000_search(query, filters=filters, rank_query=rank_query, cache_db=_library()), None
         except RuntimeError as exc:
-            if str(exc) not in warnings:
-                warnings.append(str(exc))
+            return [], str(exc)
+
+    # The searches run at once. Each gets its own copy of this request's context, which holds the visitor's keys.
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        found = list(pool.map(lambda q: q[0].run(catalogue, q[1]), [(contextvars.copy_context(), q) for q in queries]))
+    for query_index, (query, (matches, error)) in enumerate(zip(queries, found)):
+        if error and error not in warnings:
+            warnings.append(error)
+        for match in matches:
+            if match["id"] not in seen:
+                seen.add(match["id"])
+                # Interleave the searches in TONE3000's own order: first of each, then second of each...
+                packs.append({**match, "query": query, "catalog_order": match.get("catalog_rank", 99) * 10 + query_index})
     # Small models stop scoring partway through long lists: rank a catalogue-ordered shortlist.
     packs = _shortlist(packs, filters["sort"])
     if packs:
-        rank_key = f"rank:{words}:{use_web}:{','.join(str(p['id']) for p in sorted(packs, key=lambda p: p['id']))}"
-        scores = cache.get(_library(), rank_key, cache.AI_SECONDS) if reusable and not fresh else None
-        if scores is not None:
+        # Scores belong to the plan they were made for, on the ranking's fixed 0-100 scale, so a pack scored once
+        # keeps its score: when TONE3000 has new packs, only those are sent to the AI.
+        scores_key = f"scores:{feedback.brief_id(plan)}"
+        scores = cache.get(_library(), scores_key, cache.AI_SECONDS) or {}
+        unscored = [p for p in packs if str(p["id"]) not in scores]
+        if not unscored:
             cache.count(_library(), "rank_saved")
-        if scores is None:
-            scores = {}
-            if deadline - time.monotonic() < 8:
-                warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
-            else:
-                try:
-                    cache.count(_library(), "rank_ai")
-                    scores = ai.rank_packs(prompt, ai.gear_summary(plan), packs, deadline=deadline)
-                    if reusable:
-                        cache.put(_library(), rank_key, {str(k): v for k, v in scores.items()}, words)
-                except ai.AiError as exc:
-                    warnings.append(f"AI ranking unavailable, showing catalogue order: {exc}")
+        elif deadline - time.monotonic() < 8:
+            warnings.append("AI ranking skipped because the search ran out of time; showing catalogue order.")
+        else:
+            try:
+                cache.count(_library(), "rank_ai")
+                new = ai.rank_packs(prompt, ai.gear_summary(plan), unscored, deadline=deadline)
+                # A pack the AI skipped is recorded without a fit, so it isn't sent again on every search.
+                skipped = {str(p["id"]): {"fit": None, "why": ""} for p in unscored}
+                scores = {**scores, **skipped, **{str(k): v for k, v in new.items()}}
+                cache.put(_library(), scores_key, scores, words)
+            except ai.AiError as exc:
+                warnings.append(f"AI ranking unavailable, showing catalogue order: {exc}")
         scores = {int(k): v for k, v in scores.items()}  # JSON keys come back as strings
         for pack in packs:
-            if pack["id"] in scores:
+            if scores.get(pack["id"], {}).get("fit") is not None:
                 pack["ai_fit"] = scores[pack["id"]]["fit"]
                 pack["ai_why"] = scores[pack["id"]]["why"]
         packs.sort(key=lambda p: (p.get("ai_fit", -1), p.get("match_score", 0), p.get("downloads_count") or 0), reverse=True)
@@ -543,11 +576,31 @@ def api_search():
             "research_notes": research, "topic": topic, "saved_at": time.time(), "use_web": use_web,
             "library": {"id": library["id"], "status": library["status"], "reused": not fresh_research}
             if library else None}
-    if reusable and packs and not warnings:  # never save a partial answer
+    body["brief_id"] = feedback.brief_id(plan) if reusable else ""  # only saved briefs collect votes
+    body["rated_good"] = feedback.brief_votes(_library(), body["brief_id"])[0]
+    if reusable and packs and not warnings and not keep_shared:  # never save a partial answer
         cache.put(_library(), result_key, {**body, "library": body["library"] and {**body["library"], "reused": True}},
                   words)
     feedback.apply_votes(packs, feedback.pack_votes(_library(), words))
     return jsonify({**body, "cached": False})
+
+
+def _saved_plan(key: str) -> tuple[dict | None, str]:
+    """A saved plan younger than cache.AI_SECONDS, or any age while players rate its brief good: then its packs are
+    refreshed from TONE3000 and only new ones are ranked, so the liked brief stays without a stale pack list."""
+    plan = cache.get(_library(), key, cache.AI_SECONDS)
+    if plan:
+        return plan, "plan_saved"
+    older = cache.get(_library(), key, float("inf"))
+    return (older, "plan_kept_liked") if feedback.liked(_library(), older) else (None, "")
+
+
+def _checked_gear_line(gear: list) -> str:
+    """The owner's reviewed gear for approved research, as one research line the AI reads first. One short line
+    per approved entry, so the prompt doesn't grow as votes and reviews accumulate."""
+    items = "; ".join(f"{g.get('name')} ({g.get('kind')}, {ai.confidence_of(g.get('confidence'))}"
+                      + (f": {g['role']}" if g.get("role") else "") + ")" for g in gear[:12])
+    return f"- Gear checked by the site owner for this rig (trust it over the notes below): {items}"
 
 
 def _saved_answer_by_alias(prompt: str, result_suffix: str) -> dict | None:
@@ -564,26 +617,32 @@ def api_feedback():
     topic, target, vote = data.get("topic"), data.get("target"), data.get("vote")
     comment, pack_id, pack_title = data.get("comment", ""), data.get("pack_id", 0), data.get("pack_title", "")
     library_id = data.get("library_id")
+    asked_brief, brief_words = data.get("brief_id", ""), data.get("brief_words", "")
     if (not isinstance(topic, str) or not 0 < len(topic) <= 600 or target not in feedback.TARGETS
             or vote not in (1, -1) or not isinstance(comment, str) or len(comment) > 500
             or not isinstance(pack_id, int) or not isinstance(pack_title, str)
-            or (target == "pack" and pack_id <= 0) or not (library_id is None or isinstance(library_id, int))):
+            or (target == "pack" and pack_id <= 0) or not (library_id is None or isinstance(library_id, int))
+            or not isinstance(asked_brief, str) or not isinstance(brief_words, str) or len(brief_words) > 600):
         return jsonify({"error": "Invalid feedback."}), 400
     words = " ".join(knowledge.topic_words(topic))
     if not words:
         return jsonify({"error": "Invalid feedback."}), 400
     if _over_limit("feedback"):
         return _limited()
+    # The brief the vote is for: only one actually saved for this tone (under its words or the ones it was saved
+    # under) is accepted, so nobody can pile votes onto a brief they weren't shown.
+    topics = [words, " ".join(knowledge.topic_words(brief_words))]
+    brief = asked_brief if asked_brief in {feedback.brief_id(p) for p in feedback.saved_plans(_library(), topics)} else ""
     try:
         feedback.record(_library(), voter_id=feedback.voter(_visitor()), words=words, prompt=topic, target=target,
-                        vote=vote, pack_id=pack_id, pack_title=pack_title, comment=comment, entry_id=library_id)
+                        vote=vote, pack_id=pack_id, pack_title=pack_title, comment=comment, entry_id=library_id,
+                        brief=brief)
     except sqlite3.Error:
         app.logger.exception("Feedback not saved")
         return jsonify({"error": "Feedback couldn't be saved just now."}), 503
     if target == "brief" and vote == -1:
-        if library_id:
-            knowledge.flag(_library(), library_id, comment or "Visitor rated the tone brief as wrong.")
-        cache.forget_topic(_library(), words)
+        entry = knowledge.get(_library(), library_id) if library_id else None
+        feedback.bad_brief(_library(), topics, entry, comment or "Visitor rated the tone brief as wrong.")
     return jsonify({"ok": True})
 
 
@@ -703,6 +762,12 @@ def api_pack_chat():
 
 # Cab embed: a capture plus a cabinet IR, learned as one NAM model on the visitor's own Kaggle account.
 # Kaggle credentials come in X-Kaggle-Username / X-Kaggle-Key on each request and are never stored.
+
+@app.get("/tools")
+def tools_page():
+    """Inspect, check and edit a .nam file. All in the browser (static/tools.js); the server only sends the page."""
+    return render_template("tools.html")
+
 
 @app.get("/cab")
 def cab_page():

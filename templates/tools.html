@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="{{ request.script_root }}/">
+  <title>NAM file tools: inspect, check and edit a capture | TONE Search</title>
+  <meta name="description" content="Inspect a Neural Amp Modeler capture, check that it loads and plays in NAMCore, and change its output volume or metadata, all in your browser.">
+  <meta name="theme-color" content="#5b5fee">
+  <link rel="canonical" href="{{ request.base_url }}">
+  <link rel="icon" href="static/favicon.ico" sizes="any">
+  <link rel="icon" href="static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/apple-touch-icon.png">
+  <link rel="stylesheet" href="static/v{{ asset_version }}/style.css">
+</head>
+<body class="tools-page">
+  <a class="skip-link" href="#tool-file">Skip to the file tools</a>
+  <div class="page">
+    <header class="masthead">
+      <div class="masthead-top">
+        <div class="eyebrow">NAM tools</div>
+        <a href="./" class="btn btn-secondary btn-small">&larr; TONE Search</a>
+      </div>
+      <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> File tools</h1>
+      <p class="intro">See what's inside a NAM capture, check that it loads and plays in Neural Amp Modeler's engine, and change its output volume or its name and credits. Everything happens in your browser: the file is never uploaded.</p>
+      <nav class="tool-nav" aria-label="NAM tools">
+        <a href="tools" aria-current="page">File tools</a>
+        <a href="cab">Cab embed</a>
+      </nav>
+    </header>
+
+    <main id="main" class="tool-main">
+      <section class="panel tool-section" id="tool-file" aria-labelledby="file-title" tabindex="-1">
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">1</span>
+          <div>
+            <h2 id="file-title"><span class="visually-hidden">Step 1: </span>Choose a capture</h2>
+            <p class="tool-lead">Any <code>.nam</code> file: A1, A2, LSTM or anything else NAM writes.</p>
+          </div>
+        </div>
+        <div class="file-pick" data-state="empty">
+          <input type="file" id="nam-file" class="file-pick-input" accept=".nam,application/json" aria-describedby="nam-hint nam-info">
+          <label for="nam-file" class="file-pick-target">
+            <span class="file-pick-title">NAM capture</span>
+            <span class="file-pick-hint" id="nam-hint">Stays on your computer</span>
+            <span class="file-pick-row"><span class="btn btn-secondary btn-small" aria-hidden="true">Choose file</span> <span class="file-pick-name" id="nam-name">or drop it here</span></span>
+          </label>
+          <p id="nam-info" class="info file-pick-info" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="panel tool-section" aria-labelledby="inspect-title" id="inspect" hidden>
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">2</span>
+          <div>
+            <h2 id="inspect-title"><span class="visually-hidden">Step 2: </span>What's in it</h2>
+            <p class="tool-lead">Read from the file, then checked by loading and playing it in NeuralAmpModelerCore (compiled to WebAssembly by TONE3000).</p>
+          </div>
+        </div>
+        <div class="tool-check" id="check" data-state="running" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          <div><p id="check-text">Checking in NAMCore…</p><p id="check-detail" class="tool-check-detail"></p></div>
+        </div>
+        <div class="tool-grid">
+          <div class="tool-facts-group">
+            <h3 id="about-title">About the capture</h3>
+            <dl class="tool-facts" id="facts-about" aria-labelledby="about-title"></dl>
+          </div>
+          <div class="tool-facts-group">
+            <h3 id="tech-title">Technical</h3>
+            <dl class="tool-facts" id="facts-tech" aria-labelledby="tech-title"></dl>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel tool-section" aria-labelledby="edit-title" id="editor" hidden>
+        <div class="tool-step-head">
+          <span class="tool-step" aria-hidden="true">3</span>
+          <div>
+            <h2 id="edit-title"><span class="visually-hidden">Step 3: </span>Change it</h2>
+            <p class="tool-lead">Only the fields below change; everything else in the file stays exactly as it was. The edited copy is checked in NAMCore before you download it.</p>
+          </div>
+        </div>
+        <form id="edit-form" class="tool-train" novalidate>
+          <div class="tool-grid">
+            <fieldset class="tool-box">
+              <legend>Output volume</legend>
+              <div class="tool-volume">
+                <label for="volume-slider" class="tool-volume-label">Change by</label>
+                <div class="tool-volume-row">
+                  <input type="range" id="volume-slider" min="-24" max="24" step="0.5" value="0" aria-valuetext="0 dB, no change" aria-describedby="volume-help" list="volume-marks">
+                  <span class="tool-volume-number">
+                    <input type="number" id="volume" inputmode="decimal" min="-24" max="24" step="0.5" value="0" aria-label="Change by, in dB" aria-describedby="volume-help">
+                    <span aria-hidden="true">dB</span>
+                  </span>
+                </div>
+                <datalist id="volume-marks"><option value="-24"></option><option value="-12"></option><option value="0"></option><option value="12"></option><option value="24"></option></datalist>
+                <div class="tool-volume-scale" aria-hidden="true"><span>-24</span><span>-12</span><span>0</span><span>+12</span><span>+24</span></div>
+                <button type="button" id="btn-volume-zero" class="link-btn btn-small-link">Back to 0 dB</button>
+              </div>
+              <p class="tool-volume-result" id="volume-result" aria-live="polite"></p>
+              <p class="filter-help" id="volume-help"></p>
+              <p class="filter-help">Changes the capture's own output level, for players and pedals without an output knob. Players that normalise loudness (as many do) play it at the same level as before.</p>
+            </fieldset>
+            <fieldset class="tool-box">
+              <legend>Name and credits</legend>
+              <label class="field">Name <input id="meta-name" maxlength="200"></label>
+              <label class="field">Modeled by <input id="meta-modeled_by" maxlength="200"></label>
+              <div class="tool-pair">
+                <label class="field">Gear make <input id="meta-gear_make" maxlength="200"></label>
+                <label class="field">Gear model <input id="meta-gear_model" maxlength="200"></label>
+              </div>
+              <label class="field">Tone type
+                <select id="meta-tone_type">
+                  <option value="">Not set</option>
+                  <option value="clean">Clean</option>
+                  <option value="crunch">Crunch</option>
+                  <option value="overdrive">Overdrive</option>
+                  <option value="hi_gain">High gain</option>
+                  <option value="fuzz">Fuzz</option>
+                </select>
+              </label>
+              <p class="filter-help" id="gear-type-help"></p>
+            </fieldset>
+          </div>
+          <p id="edit-status" class="info" role="status"></p>
+          <div class="tool-actions">
+            <span id="edit-count" class="tool-edit-count" aria-live="polite"></span>
+            <button type="button" id="btn-reset" class="btn btn-secondary" disabled>Undo changes</button>
+            <button type="submit" id="btn-save" class="btn btn-primary">Check and download</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p><strong>Captures belong to their creators.</strong> Keep a capture's credits when you share an edited copy, and check its licence allows changes.</p>
+      <details class="footer-legal">
+        <summary>Affiliation and privacy</summary>
+        <p><strong>Not affiliated.</strong> TONE Search is an independent project, not affiliated with or endorsed by TONE3000 or Neural Amp Modeler. The engine is TONE3000's <a href="https://github.com/tone-3000/neural-amp-modeler-wasm" target="_blank" rel="noopener">neural-amp-modeler-wasm</a>, and the edits follow NAM Mixer's NAM tools.</p>
+        <p><strong>Privacy.</strong> Files you open here are read and edited in your browser and never sent to this site's server.</p>
+      </details>
+      <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. <a href="https://github.com/daverage/tonesearch" target="_blank" rel="noopener">Source code on GitHub</a>, free for non-commercial use under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener">PolyForm Noncommercial License</a>.</p>
+    </footer>
+  </div>
+  <div id="announcer" class="visually-hidden" aria-live="polite"></div>
+  <script type="module" src="static/v{{ asset_version }}/tools.js"></script>
+</body>
+</html>

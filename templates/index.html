@@ -40,7 +40,7 @@
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM capture discovery</div>
-        <a href="cab" class="btn-small-link">Cab embed</a>
+        <a href="tools" class="btn-small-link">NAM tools</a>
         <button type="button" id="btn-about" class="link-btn btn-small-link" aria-haspopup="dialog">How it works</button>
         <button type="button" id="btn-settings" class="btn btn-secondary btn-small" aria-haspopup="dialog">Settings<span id="settings-badge" class="settings-badge" hidden> · your keys</span></button>
       </div>
@@ -285,6 +285,70 @@
           Use the secret key, which starts with <code>t3k_cs_</code>.</p>
         <label class="field">Secret key <input name="tone3000_api_key" type="password" autocomplete="off" placeholder="t3k_cs_… (optional)"></label>
       </fieldset>
+
+      <details class="mcp-setup" id="mcp-setup" data-mcp-url="{{ request.url_root }}mcp">
+        <summary>Use TONE Search from your AI assistant (MCP)</summary>
+        <p class="settings-help">Claude, ChatGPT, Cursor and other assistants can use TONE Search as a tool, through
+          <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">MCP</a>. Your assistant does the
+          thinking (it plans the searches and ranks the packs), so no AI key is needed, only your own TONE3000 secret key
+          (set it above). There are two ways to use it:</p>
+        <ul class="mcp-options">
+          <li><strong>On this site:</strong> paste an address into your assistant. Nothing to install.{% if mcp_calls_per_hour %} Each address gets {{ mcp_calls_per_hour }} tool calls an hour, including up to {{ mcp_research_per_hour }} web research calls.{% endif %}</li>
+          <li><strong>Install it yourself:</strong> run it on your own computer with Python. No hourly limit.</li>
+        </ul>
+        <p class="mcp-key-status" id="mcp-key-status" aria-live="polite"></p>
+
+        <h3 class="mcp-option-title">Option 1: use it on this site</h3>
+        <h4 id="mcp-claude-ai">Claude.ai or ChatGPT</h4>
+        <ol class="mcp-steps">
+          <li>Claude.ai: <strong>Settings → Connectors → Add custom connector</strong>. ChatGPT: <strong>Settings → Connectors → Create</strong> (turn on developer mode first).</li>
+          <li>Name it <strong>TONE Search</strong> and paste this address, which includes your key:</li>
+        </ol>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-labelledby="mcp-claude-ai"><code data-mcp="url-key"></code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy="url-key" aria-label="Copy the connector address">Copy</button>
+        </div>
+        <p class="settings-help">Keep this address private, like the key itself. Keys in addresses can appear in server logs, so where an app can send a header (below), use that instead.</p>
+        <h4 id="mcp-claude-code">Claude Code</h4>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-labelledby="mcp-claude-code"><code data-mcp="claude-code"></code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy="claude-code" aria-label="Copy the Claude Code command for this site">Copy</button>
+        </div>
+        <h4 id="mcp-json">Claude Desktop, Cursor and other apps with a JSON config</h4>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-labelledby="mcp-json"><code data-mcp="json"></code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy="json" aria-label="Copy the JSON config for this site">Copy</button>
+        </div>
+        <p class="settings-help">Add it under <code>mcpServers</code> in the app's config (Claude Desktop: <strong>Settings → Developer → Edit Config</strong>; Cursor: <code>~/.cursor/mcp.json</code>), then restart the app. If the app doesn't support <code>headers</code>, use the address with the key instead.</p>
+
+        <h3 class="mcp-option-title">Option 2: install it yourself</h3>
+        <ol class="mcp-steps">
+          <li>You need Python 3.10 or newer. Download the code and install what it needs:</li>
+        </ol>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-label="Download and install commands"><code>git clone https://github.com/daverage/tonesearch.git
+cd tonesearch
+python3 -m pip install -r requirements.txt</code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy-text="git clone https://github.com/daverage/tonesearch.git&#10;cd tonesearch&#10;python3 -m pip install -r requirements.txt" aria-label="Copy the download and install commands">Copy</button>
+        </div>
+        <ol class="mcp-steps" start="2">
+          <li>Add it to your assistant. <strong>Claude Code</strong>, run from the <code>tonesearch</code> folder:</li>
+        </ol>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-label="Claude Code command for your own copy"><code data-mcp="local-claude-code"></code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy="local-claude-code" aria-label="Copy the Claude Code command for your own copy">Copy</button>
+        </div>
+        <p class="settings-help"><strong>Claude Desktop, Cursor and other apps:</strong> add this to the app's config, replacing <code>/full/path/to/tonesearch</code> with the folder you downloaded (on Windows, use <code>python</code> instead of <code>python3</code>), then restart the app completely:</p>
+        <div class="mcp-snippet">
+          <pre tabindex="0" aria-label="JSON config for your own copy"><code data-mcp="local-json"></code></pre>
+          <button type="button" class="btn btn-secondary btn-small" data-copy="local-json" aria-label="Copy the JSON config for your own copy">Copy</button>
+        </div>
+
+        <h3 class="mcp-option-title">Check it works</h3>
+        <p class="settings-help">Start a new chat with TONE Search turned on and ask: <em>"Use TONE Search to find NAM captures for Gilmour's Comfortably Numb solo."</em> It should look up the rig first, then search TONE3000 and rank the packs itself. Tell it whether the result was right: it records your rating, which improves results for everyone.</p>
+        <p class="settings-help">If it doesn't connect, see the
+          <a href="https://github.com/daverage/tonesearch#troubleshooting" target="_blank" rel="noopener">MCP troubleshooting guide</a>.</p>
+      </details>
 
       <p id="settings-error" class="t3ai-warning" role="alert" tabindex="-1" hidden></p>
       <div id="settings-clear-confirm" class="settings-confirm" role="group" aria-labelledby="clear-confirm-text" hidden>

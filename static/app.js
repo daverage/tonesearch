@@ -260,12 +260,19 @@
     const meta = el("p", "t3ai-meta", `Searched TONE3000 for ${data.queries.map((q) => `"${q}"`).join(", ")}${researchedLabel(data)}.${answeredBy(data.ai)}`);
     brief.append(meta);
     if (data.cached) {
-      const saved = el("p", "t3ai-meta t3ai-saved", `Saved answer from ${new Date(data.saved_at * 1000).toLocaleDateString()}, so it was instant. `);
+      // Saved answers can be up to a month old (longer while players rate them good): say so, and offer a fresh one.
+      const when = new Date(data.saved_at * 1000).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+      const asked = data.topic && data.topic.toLowerCase() !== (state.goal || "").toLowerCase() ? ` for "${data.topic}"` : "";
+      const liked = data.rated_good ? `, rated good by ${data.rated_good} player${data.rated_good === 1 ? "" : "s"}` : "";
+      const saved = el("p", "t3ai-meta t3ai-saved", `Saved answer${asked} from ${when}${liked}, so it was instant. Packs added to TONE3000 since then aren't included. `);
       const again = el("button", "link-btn", "Search again");
       again.type = "button";
       again.addEventListener("click", () => searchAgain(turn, data));
       saved.append(again);
       brief.append(saved);
+    }
+    if (!data.cached && data.rated_good) {
+      brief.append(el("p", "t3ai-meta t3ai-saved", `Players rated this brief good (${data.rated_good}), so it was kept; the packs are fresh from TONE3000.`));
     }
     if (data.research_notes) brief.append(researchNotes(data.research_notes, data.library));
     data.warnings.forEach((w) => brief.append(el("p", "t3ai-warning", w)));
@@ -294,7 +301,9 @@
       announce(text);
     };
     const fail = (error) => { box.append(el("p", "t3ai-warning", error.message)); announce(error.message); };
-    yes.addEventListener("click", () => sendFeedback({ target: "brief", vote: 1, library_id: libraryId })
+    // The brief's own id, and the topic it's saved under, so the vote counts for it whichever wording showed it.
+    const brief = { brief_id: data.brief_id || "", brief_words: (data.plan && data.plan.words) || "" };
+    yes.addEventListener("click", () => sendFeedback({ target: "brief", vote: 1, library_id: libraryId, ...brief })
       .then(() => done("Thanks for the feedback.")).catch(fail));
     no.addEventListener("click", () => {
       const comment = el("textarea", "t3ai-rate-comment");
@@ -303,7 +312,7 @@
       comment.setAttribute("aria-label", "What was wrong with the tone brief (optional)");
       const send = el("button", "btn btn-primary btn-small", "Send");
       send.type = "button";
-      send.addEventListener("click", () => sendFeedback({ target: "brief", vote: -1, comment: comment.value.trim(), library_id: libraryId })
+      send.addEventListener("click", () => sendFeedback({ target: "brief", vote: -1, comment: comment.value.trim(), library_id: libraryId, ...brief })
         .then(() => done("Thanks. This will be checked, and the next search for this tone will be worked out again.")).catch(fail));
       box.replaceChildren(comment, send);
       comment.focus();
@@ -1028,6 +1037,53 @@
     const closeDialog = () => (dialog.close ? dialog.close() : dialog.removeAttribute("open"));
     openBtn.addEventListener("click", () => { fill(); openDialog(); });
     document.getElementById("btn-settings-cancel").addEventListener("click", closeDialog);
+
+    // MCP setup: the snippets show this site's own address and the visitor's TONE3000 key as typed above (saved or
+    // not), so they can be pasted as they are. The key never leaves the page; it's only put into the text.
+    const mcp = document.getElementById("mcp-setup");
+    if (mcp) {
+      const base = mcp.dataset.mcpUrl;
+      const PLACEHOLDER = "t3k_cs_YOURKEY";
+      const keyField = form.elements.tone3000_api_key;
+      const status = document.getElementById("mcp-key-status");
+      const snippets = (key) => ({
+        "url-key": `${base}?key=${encodeURIComponent(key)}`,
+        "claude-code": `claude mcp add --transport http tonesearch ${base} \\\n  --header "Authorization: Bearer ${key}"`,
+        json: JSON.stringify({ mcpServers: { tonesearch: { type: "http", url: base, headers: { Authorization: `Bearer ${key}` } } } }, null, 2),
+        "local-claude-code": `claude mcp add tonesearch --env TONE3000_API_KEY=${key} -- python3 -m tonesearch.mcp_server`,
+        "local-json": JSON.stringify({ mcpServers: { tonesearch: { command: "python3", args: ["-m", "tonesearch.mcp_server"],
+          env: { TONE3000_API_KEY: key, PYTHONPATH: "/full/path/to/tonesearch" } } } }, null, 2),
+      });
+      const fillMcp = () => {
+        const typed = keyField.value.trim();
+        const key = typed.startsWith("t3k_cs_") ? typed : PLACEHOLDER;
+        const texts = snippets(key);
+        mcp.querySelectorAll("[data-mcp]").forEach((code) => { code.textContent = texts[code.dataset.mcp]; });
+        status.textContent = key !== PLACEHOLDER ? "Your TONE3000 key from above is filled in below."
+          : typed ? "The key above isn't a secret key (it should start with t3k_cs_), so the examples below show t3k_cs_YOURKEY."
+            : "Add your TONE3000 secret key above and it's filled in below. Until then the examples show t3k_cs_YOURKEY.";
+      };
+      keyField.addEventListener("input", fillMcp);
+      openBtn.addEventListener("click", fillMcp); // after fill() has put the saved key in the field
+      mcp.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-copy], [data-copy-text]");
+        if (!button) return;
+        const code = button.dataset.copy ? mcp.querySelector(`[data-mcp="${button.dataset.copy}"]`) : null;
+        const text = code ? code.textContent : button.dataset.copyText;
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = "Copied";
+          announce("Copied.");
+        } catch {
+          // No clipboard access (an http page or an older browser): select the text so Ctrl/Cmd+C copies it.
+          const target = button.previousElementSibling;
+          window.getSelection().selectAllChildren(target);
+          announce("Selected. Press Control or Command plus C to copy.");
+        }
+        setTimeout(() => { button.textContent = "Copy"; }, 2000);
+      });
+      fillMcp();
+    }
     // Clear all asks first: it deletes keys the visitor may not have written down anywhere else.
     const confirmBox = document.getElementById("settings-clear-confirm");
     const mainActions = document.getElementById("settings-main-actions");

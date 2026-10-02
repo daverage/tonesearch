@@ -72,7 +72,8 @@ def test_new_filters_reuse_the_plan_and_ranking_inputs(calls):
 def test_search_again_and_refinements_skip_saved_answers(calls):
     client = app_module.app.test_client()
     _search(client)
-    assert not _search(client, fresh=True)["cached"] and calls["plan"] == 2 and calls["rank"] == 2
+    assert not _search(client, fresh=True)["cached"] and calls["plan"] == 2
+    assert calls["rank"] == 1  # the new plan came out identical, so its packs' scores still apply
     history = [{"role": "user", "content": "Porcupine Tree In Absentia"}, {"role": "assistant", "content": "s"}]
     refined = _search(client, "more gain", history=history)
     assert not refined["cached"] and refined["topic"] == "Porcupine Tree In Absentia more gain" and calls["plan"] == 3
@@ -162,10 +163,11 @@ def test_admin_feedback_view(monkeypatch):
     assert "needs the Dumble" in page and "srv texas flood" in page
 
 
-def test_new_packs_appear_after_a_day_without_asking_the_ai_again(calls, monkeypatch):
+def test_new_packs_appear_once_the_answer_expires_without_asking_the_ai_again(calls, monkeypatch):
     client = app_module.app.test_client()
     _search(client)
-    monkeypatch.setattr(cache, "CATALOGUE_SECONDS", 0)  # a day later: catalogue results and whole answers expire
+    monkeypatch.setattr(cache, "CATALOGUE_SECONDS", 0)  # catalogue results are a day old
+    monkeypatch.setattr(cache, "ANSWER_SECONDS", 0)  # and the whole answer is past its month
     monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [{"id": 3, "title": "New Bad Cat", "match_score": 9}])
     later = _search(client)
     assert not later["cached"] and [p["id"] for p in later["results"]] == [3]
@@ -257,3 +259,121 @@ def test_saved_answers_are_narrowed_by_the_end_of_their_key(tmp_path):
     cache.put(db, "result:bad cat:False:{}", {"topic": "without"}, "bad cat")
     assert [a["topic"] for _, a, _ in cache.by_prefix(db, "result:", 60, ":False:{}")] == ["without"]
     assert len(cache.by_prefix(db, "result:", 60)) == 2
+
+
+def _age(prefix: str, days: float):
+    import sqlite3
+    with sqlite3.connect(app_module._library()) as db:
+        db.execute("UPDATE cache SET created = ? WHERE key LIKE ?", (time.time() - days * 86400, f"{prefix}%"))
+
+
+def _vote(client, answer, vote, comment=""):
+    """A brief vote as the page sends it: with the brief's id and the topic it's saved under."""
+    return client.post("/api/feedback", json={"topic": answer["topic"], "target": "brief", "vote": vote, "comment": comment,
+                                              "brief_id": answer["brief_id"], "brief_words": answer["plan"].get("words", "")})
+
+
+def test_a_liked_brief_outlives_its_month_with_fresh_packs(calls):
+    client = app_module.app.test_client()
+    first = _search(client)
+    _vote(client, first, 1)
+    _age("result:", 400); _age("plan:", 400)
+    later = _search(client)
+    assert not later["cached"] and later["plan"]["summary"] == first["plan"]["summary"]
+    assert later["rated_good"] == 1
+    assert calls["plan"] == 1 and calls["search"] == 2  # the liked brief, with packs fetched again
+    assert calls["rank"] == 1  # the same packs keep the scores they had
+
+
+def test_an_unliked_brief_is_worked_out_again_after_its_month(calls):
+    client = app_module.app.test_client()
+    _search(client)
+    _age("result:", 400); _age("plan:", 400)
+    _search(client)
+    assert calls["plan"] == 2
+
+
+def test_votes_on_an_earlier_brief_dont_count_for_a_new_one(calls, monkeypatch):
+    client = app_module.app.test_client()
+    first = _search(client)
+    _vote(client, first, 1)
+    _vote(client, first, -1)  # the same voter changes their mind: not liked, so it's worked out again
+    assert not _search(client)["cached"] and calls["plan"] == 2
+    assert _search(client)["rated_good"] == 0  # the new brief starts with no votes
+
+
+def test_search_again_doesnt_replace_a_brief_others_liked(calls, monkeypatch):
+    client = app_module.app.test_client()
+    first = _search(client)
+    _vote(client, first, 1)
+    monkeypatch.setattr(app_module.ai, "plan_tone", lambda *a, **k: {
+        "summary": "A different take", "advice": [], "gear": GEAR, "search_queries": ["Bad Cat"]})
+    mine = _search(client, fresh=True)
+    assert mine["plan"]["summary"] == "A different take"
+    everyone = _search(client)
+    assert everyone["cached"] and everyone["plan"]["summary"] == "Bad Cat crunch"
+
+
+def test_one_bad_vote_doesnt_outvote_players_who_liked_a_brief(calls):
+    client = app_module.app.test_client()
+    first = _search(client)
+    for voter in ("a", "b"):
+        app_module.feedback.record(app_module._library(), voter_id=voter, words=" ".join(knowledge.topic_words(first["topic"])),
+                                   prompt=first["topic"], target="brief", vote=1, brief=first["brief_id"])
+    _vote(client, first, -1, "missing the boost")
+    assert _search(client)["cached"]  # 2 good, 1 bad: still the shared answer
+    assert knowledge.get(app_module._library(), first["library"]["id"])["status"] != "flagged"
+
+
+def test_a_bad_vote_never_unapproves_the_owners_research(calls):
+    client = app_module.app.test_client()
+    first = _search(client)
+    entry = knowledge.get(app_module._library(), first["library"]["id"])
+    knowledge.update(app_module._library(), entry["id"], topic=entry["topic"], notes=entry["notes"], gear=entry["gear"],
+                     aliases=[], status="approved")
+    client.post("/api/feedback", json={"topic": first["topic"], "target": "brief", "vote": -1,
+                                       "library_id": entry["id"]})
+    assert knowledge.get(app_module._library(), entry["id"])["status"] == "approved"
+    again = _search(client)
+    assert not again["cached"] and calls["plan"] == 2  # the brief is worked out again from the approved research
+
+
+def test_only_new_packs_are_ranked(calls, monkeypatch):
+    client = app_module.app.test_client()
+    _search(client)
+    sent = []
+    monkeypatch.setattr(app_module.ai, "rank_packs", lambda prompt, summary, packs, **k: sent.append(
+        [p["id"] for p in packs]) or {3: {"fit": 70, "why": "new"}})
+    monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [
+        {"id": 1, "title": "Bad Cat Hot Cat", "match_score": 9}, {"id": 3, "title": "New Cat", "match_score": 8}])
+    later = _search(client, filters={"gears": ["amp"]})  # no saved answer for these filters; same plan
+    assert sent == [[3]] and {p["id"]: p["ai_fit"] for p in later["results"]} == {1: 80, 3: 70}
+
+
+def test_catalogue_searches_run_together_with_the_visitors_key(calls, monkeypatch):
+    seen = []
+    monkeypatch.setattr(app_module.ai, "plan_tone", lambda *a, **k: {
+        "summary": "s", "advice": [], "gear": GEAR, "search_queries": ["Bad Cat", "Marshall JCM800", "Klon"]})
+
+    def search(query, **kwargs):
+        seen.append((query, overrides.get("tone3000_api_key")))
+        if query == "Klon":
+            raise RuntimeError("TONE3000 search failed: busy")
+        return [{"id": len(query), "title": query, "match_score": 5}]
+    monkeypatch.setattr(app_module, "tone3000_search", search)
+    reply = app_module.app.test_client().post("/api/search", headers={"X-TONE3000-Key": "t3k_cs_" + "a" * 20},
+                                              json={"prompt": "Porcupine Tree In Absentia", "use_research": True}).get_json()
+    assert sorted(seen) == [(q, "t3k_cs_" + "a" * 20) for q in ("Bad Cat", "Klon", "Marshall JCM800")]
+    assert [p["query"] for p in sorted(reply["results"], key=lambda p: p["catalog_order"])] == ["Bad Cat", "Marshall JCM800"]
+    assert reply["warnings"] == ["TONE3000 search failed: busy"]
+
+
+def test_mcp_bad_ratings_follow_the_same_rules(calls):
+    client = app_module.app.test_client()
+    first = _search(client)
+    entry = knowledge.get(app_module._library(), first["library"]["id"])
+    knowledge.update(app_module._library(), entry["id"], topic=entry["topic"], notes=entry["notes"], gear=entry["gear"],
+                     aliases=[], status="approved")
+    mcp_server.rate_result(first["topic"], "bad", comment="wrong amp", voter_id="m1")
+    assert knowledge.get(app_module._library(), entry["id"])["status"] == "approved"
+    assert not _search(client)["cached"]  # but the brief is worked out again

@@ -194,8 +194,9 @@ def test_forum_replies_are_read_once():
 
 def test_notes_are_one_line_per_source_whatever_the_page_returns():
     results = [{"href": f"https://s{i}.example/rig", "title": f"Source {i}", "body": ""} for i in range(2)]
-    notes = research.web_notes("Example Band", search=lambda *a, **k: results, evidence=lambda href, topic:
-                               "Example Band recorded through a Zorblax QX-57 amplifier.\nThe exact model is unclear.")
+    pages = {"https://s0.example/rig": "Example Band recorded through a Zorblax QX-57 amplifier.\nThe exact model is unclear.",
+             "https://s1.example/rig": "Example Band toured with\na Frobnic FX-9 fuzz pedal."}  # distinct: copies are skipped
+    notes = research.web_notes("Example Band", search=lambda *a, **k: results, evidence=lambda href, topic: pages[href])
     lines = notes.splitlines()
     assert len(lines) == 2 and all(line.startswith("- Source") and line.endswith("/rig)") for line in lines)
 

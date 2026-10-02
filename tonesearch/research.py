@@ -702,7 +702,7 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
     with ThreadPoolExecutor(max_workers=len(candidates) or 1) as pool:
         extracts = list(pool.map(lambda r: evidence(str(r.get("href", "")).strip(), topic), candidates))
     topic_words = _topic_words(topic)
-    notes = []
+    notes, taken = [], []
     for result, extract in zip(candidates, extracts):
         title = str(result.get("title", "")).strip()
         snippet = re.sub(r"\s+", " ", str(result.get("body", ""))).strip()
@@ -715,7 +715,12 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
                 for part in _split_sentences(snippet)):
             extract = f"Search snippet only: {snippet}"  # the page itself couldn't be read: weaker evidence
         text = extract
+        words = set(re.findall(r"[a-z0-9]+", text.lower()))
+        # Syndicated articles appear word for word on several sites; a copy would only take another source's place.
+        if text and any(len(words & other) >= 0.85 * min(len(words), len(other)) for other in taken):
+            continue
         if text:
+            taken.append(words)
             notes.append(f"- {title[:120]}: {text[:EVIDENCE_CHARS]} ({result['href']})")  # URL last and intact
         if len(notes) == MAX_SOURCES:
             break

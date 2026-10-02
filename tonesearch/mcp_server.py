@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -172,7 +171,7 @@ def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
         return "This research already has a gear list, so it was left as it is."
     # Only gear the research itself names: the library records what sources say, not what an assistant recalls.
     notes = entry["notes"].lower()
-    supported = [g for g in items if _named_in(g["name"], notes)]
+    supported = [g for g in items if ai.named_in(g["name"], notes)]
     skipped = [g["name"] for g in items if g not in supported]
     if not supported:
         return ("Nothing saved: none of these appear in the research notes. Only save gear the notes name. "
@@ -180,13 +179,6 @@ def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
     knowledge.add_gear(library_path(), entry["id"], supported)
     return (f"Saved {len(supported)} gear item{'s' if len(supported) != 1 else ''} with the research."
             + (f" Not saved, because the notes don't name them: {', '.join(skipped)}." if skipped else ""))
-
-
-def _named_in(name: str, notes: str) -> bool:
-    """True when the notes mention the product: its model word (B7K, Cali76) or two of its other words."""
-    words = [w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) > 2 or any(c.isdigit() for c in w)]
-    found = [w for w in words if re.search(rf"\b{re.escape(w)}\b", notes)]
-    return any(any(c.isdigit() for c in w) for w in found) or len(found) >= min(2, len(words))
 
 
 def rate_result(description: str, rating: str, pack_id: int = 0, pack_title: str = "", comment: str = "", *,
@@ -199,13 +191,15 @@ def rate_result(description: str, rating: str, pack_id: int = 0, pack_title: str
         raise ToolError("rating must be good or bad; comment up to 500 characters.")
     vote, target = (1 if rating == "good" else -1), ("pack" if pack_id else "brief")
     entry = knowledge.find(library_path(), description) if target == "brief" else None
+    # The brief they were shown is the website's saved answer for this rig (see _saved_answer), if there is one.
+    found = knowledge.saved_answer(library_path(), description) if target == "brief" else None
+    plan = (found[1].get("plan") or {}) if found else {}
+    topics = [words, found[0] if found else "", plan.get("words", "")]
     feedback.record(library_path(), voter_id=voter_id, words=words, prompt=description, target=target, vote=vote,
                     pack_id=pack_id, pack_title=pack_title, comment=comment, entry_id=entry and entry["id"],
-                    source="mcp")
+                    source="mcp", brief=feedback.brief_id(plan) if plan else "")
     if target == "brief" and vote == -1:
-        if entry:
-            knowledge.flag(library_path(), entry["id"], comment or "An MCP user rated the research as wrong.")
-        cache.forget_topic(library_path(), words)
+        feedback.bad_brief(library_path(), topics, entry, comment or "An MCP user rated the research as wrong.")
     return "Thanks, your feedback was saved."
 
 

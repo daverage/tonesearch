@@ -93,3 +93,107 @@ def test_a_plan_saved_by_older_rules_is_worked_out_again_and_fills_the_aliases(c
     _search("Periphery bass")
     assert calls["plan"] == 1  # not reused
     assert knowledge.get(db, entry_id)["aliases"] == "nolly, adam getgood, periphery"
+
+
+def _age_saved(prefix: str, days: float):
+    import sqlite3, time
+    with sqlite3.connect(app_module._library()) as db:
+        db.execute("UPDATE cache SET created = ? WHERE key LIKE ?", (time.time() - days * 86400, f"{prefix}%"))
+
+
+def test_saved_answers_last_a_month_not_a_day(calls):
+    _search("Periphery bass")
+    _age_saved("result:", 3)
+    again = _search("Periphery bass")
+    assert again["cached"] and calls["plan"] == 1  # older than the 24-hour catalogue cache, still instant
+    _age_saved("result:", 31)
+    assert not _search("Periphery bass")["cached"]
+
+
+def test_the_same_rig_asked_another_way_reuses_the_plan_with_the_research(calls):
+    _search("Periphery bass")
+    other = _search("Adam Getgood bass", filters={"gears": ["pedal"]})  # other filters: no saved answer
+    assert not other["cached"] and other["library"]["reused"]
+    assert calls == {"web": 1, "plan": 1}  # research and plan both reused; only TONE3000 and ranking ran
+    _search("Adam Getgood bass warm")  # a sound the saved request didn't describe: a new plan
+    assert calls["plan"] == 2
+
+
+def test_approved_research_sends_its_checked_gear_to_the_ai(monkeypatch, calls):
+    seen = []
+    monkeypatch.setattr(app_module.ai, "plan_tone", lambda prompt, research_notes="", **k: seen.append(research_notes) or json.loads(json.dumps(PLAN)))
+    entry_id = knowledge.save(app_module._library(), "Periphery bass", NOTES,
+                              [{"kind": "amp", "name": "Darkglass B7K", "role": "his preamp", "confidence": "best"}])
+    _search("Periphery bass", fresh=True)
+    assert seen[-1] == NOTES  # unreviewed research: the notes only
+    knowledge.update(app_module._library(), entry_id, topic="Periphery bass", notes=NOTES, status="approved",
+                     gear=[{"kind": "effect", "name": "Darkglass B7K", "role": "his preamp", "confidence": "best"}],
+                     aliases=[])
+    _search("Periphery bass", fresh=True)
+    first, rest = seen[-1].split("\n", 1)
+    assert first.startswith("- Gear checked by the site owner") and "Darkglass B7K (effect, best: his preamp)" in first
+    assert rest == NOTES
+
+
+def _rate(answer, vote, visitor):
+    return app_module.app.test_client().post("/api/feedback", headers={"CF-Connecting-IP": visitor}, json={
+        "topic": answer["topic"], "target": "brief", "vote": vote,
+        "brief_id": answer["brief_id"], "brief_words": answer["plan"].get("words", "")})
+
+
+def test_votes_from_every_wording_count_for_the_same_brief(calls):
+    first = _search("Periphery bass")
+    _rate(first, 1, "203.0.113.1")
+    other = _search("Adam Getgood bass", filters={"gears": ["pedal"]})  # the same brief, reused through the research
+    assert other["brief_id"] == first["brief_id"] and other["rated_good"] == 1
+    _rate(other, 1, "203.0.113.2")
+    _rate(other, 1, "203.0.113.1")  # the first voter again, under another wording: still one vote
+    assert app_module.feedback.brief_votes(app_module._library(), first["brief_id"]) == (2, 0)
+
+
+def test_a_vote_for_a_brief_that_isnt_saved_counts_for_nothing(calls):
+    first = _search("Periphery bass")
+    _rate({**first, "brief_id": "0" * 20}, 1, "203.0.113.9")
+    assert app_module.feedback.brief_votes(app_module._library(), "0" * 20) == (0, 0)
+    assert app_module.feedback.brief_votes(app_module._library(), first["brief_id"]) == (0, 0)
+
+
+def test_a_bad_rating_clears_the_brief_where_it_was_saved(calls):
+    _search("Periphery bass")
+    other = _search("Adam Getgood bass", filters={"gears": ["pedal"]})
+    assert calls["plan"] == 1
+    _rate(other, -1, "203.0.113.3")
+    _search("Adam Getgood bass", filters={"gears": ["pedal"]})
+    assert calls["plan"] == 2  # the brief saved under "Periphery bass" was cleared, so it's worked out again
+
+
+def test_an_alias_stands_in_for_part_of_the_topic_never_all_of_it():
+    words = " ".join(knowledge.topic_words("guitar metallica's black album"))
+    aliases = "james hetfield, 1991, metal thrash"
+    assert words == "black metallica"  # the possessive is trimmed
+    assert knowledge.match_score("metallica 1991", words, aliases) > 0
+    assert knowledge.match_score("James Hetfield Black Album", words, aliases) > 0
+    assert knowledge.match_score("James Hetfield", words, aliases) == 0  # his whole career isn't this album
+    assert knowledge.match_score("thrash metal", words, aliases) == 0  # a genre the notes mention isn't this rig
+    assert knowledge.match_score("metallica black album", "black metallica's", "") == 1.0  # words saved before
+    assert knowledge.clean_aliases(["James Hetfield"]) == ["james hetfield"]  # kept in the order written
+
+
+def test_single_words_already_in_the_request_are_not_kept_as_aliases():
+    from tonesearch import ai
+    kept = ai.filter_aliases("guitar metallica's black album", ["Metallica", "Black", "1991", "James Hetfield"],
+                             evidence="James Hetfield recorded it in 1991")
+    assert kept == ["1991", "James Hetfield"]
+
+
+def test_older_feedback_tables_gain_the_brief_column(tmp_path):
+    import sqlite3
+    db = tmp_path / "old.sqlite3"
+    with sqlite3.connect(db) as old:
+        old.execute("""CREATE TABLE feedback (id INTEGER PRIMARY KEY, created REAL NOT NULL, voter TEXT NOT NULL,
+            words TEXT NOT NULL, prompt TEXT NOT NULL, target TEXT NOT NULL, pack_id INTEGER NOT NULL DEFAULT 0,
+            pack_title TEXT NOT NULL DEFAULT '', vote INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '',
+            entry_id INTEGER, source TEXT NOT NULL DEFAULT 'web', UNIQUE (voter, words, target, pack_id))""")
+        old.execute("INSERT INTO feedback (created, voter, words, prompt, target, vote) VALUES (1, 'v', 'w', 'w', 'brief', 1)")
+    app_module.feedback.record(db, voter_id="v2", words="w", prompt="w", target="brief", vote=1, brief="b" * 20)
+    assert app_module.feedback.brief_votes(db, "b" * 20) == (1, 0)

@@ -72,6 +72,15 @@ CASES = {
     "periphery-axe-fx": ("Misha Mansoor Periphery guitar tone", [
         ("keeps the documented Axe-Fx", lambda p, n: _when(n, r"axe-?fx", lambda: bool(_gear(p, r"axe-?fx")))),
     ]),
+    # The notes say Hetfield used Bob Rock's Jose-modded Marshall with his Boogie Mark II; one live plan dropped the
+    # Boogie and swapped in a stock JCM800 and a JCM900 that no source names.
+    "metallica-black-album": ("guitar metallica's black album", [
+        ("keeps the Boogie Mark II", lambda p, n: _when(n, r"boogie", lambda: bool(_gear(p, r"boogie|mesa")))),
+        ("keeps the Jose-modded Marshall in the notes' words", lambda p, n: _when(
+            n, r"jose", lambda: bool(_gear(p, r"jose|modded|modified")))),
+        ("gear the notes don't name is only an alternative", lambda p, n: all(
+            g["confidence"] == "alternative" for g in p["gear"] if not ai.named_in(g["name"], n))),
+    ]),
     # The research is all "best microphone" lists, but the player wants a DI classical guitar to sound miked.
     "classical-di-to-mic": ("makes direct input classical guitar more guitar condenser microphone", [
         ("no search names a microphone", lambda p, n: not any(

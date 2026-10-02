@@ -674,7 +674,8 @@ def test_web_notes_take_one_page_per_site():
 
     def evidence(href, topic):
         fetched.append(href)
-        return "He recorded it with a Marshall amp and a fuzz pedal through the studio cab."
+        return ("He recorded it with a Marshall amp and a fuzz pedal through the studio cab." if "tonesite" in href
+                else "On the record he played a Fender Vibroverb with an Ibanez Tube Screamer.")  # distinct: copies are skipped
 
     notes = research.web_notes("SRV tone", search=lambda *a, **k: pages, evidence=evidence)
     assert fetched == ["https://tonesite.example/song-0", "https://forum.example/thread"]

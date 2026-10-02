@@ -43,22 +43,34 @@ _DESCRIPTIONS = {
 }
 
 
+def _word(word: str) -> str:
+    """One topic word: trimmed, and without a possessive, so "Metallica's" and "metallica" match."""
+    word = word.strip(".'’-")
+    return re.sub(r"['’]s$", "", word)
+
+
+def _ordered_words(text: str) -> list[str]:
+    """The words that identify a tone request, lowercased and without filler, in the order they were written."""
+    words = (_word(w) for w in re.findall(r"[\w'’.-]+", _topic(text).lower()))
+    return list(dict.fromkeys(w for w in words if len(w) > 1 and w not in _GENERIC))
+
+
 def topic_words(text: str) -> list[str]:
     """The words that identify a tone request, lowercased, sorted and without filler."""
-    words = {w.strip(".'’-") for w in re.findall(r"[\w'’.-]+", _topic(text).lower())}
-    return sorted(w for w in words if len(w) > 1 and w not in _GENERIC)
+    return sorted(_ordered_words(text))
 
 
 def identity_words(words) -> set[str]:
-    """The words that say whose rig a request is about: topic words without sound descriptions."""
-    return {w for w in words if w not in _DESCRIPTIONS}
+    """The words that say whose rig a request is about: topic words without sound descriptions. Words saved before
+    possessives were trimmed ("metallica's") are trimmed here too, so older entries keep matching."""
+    return {w for w in map(_word, words) if w and w not in _DESCRIPTIONS}
 
 
 def clean_aliases(aliases) -> list[str]:
     """Up to 12 short alternate names, kept as phrases rather than one shared bag of words."""
     cleaned = []
     for alias in aliases if isinstance(aliases, list) else []:
-        words = [w for w in topic_words(str(alias)) if w not in _DESCRIPTIONS]
+        words = [w for w in _ordered_words(str(alias)) if w not in _DESCRIPTIONS]  # "james hetfield", as written
         phrase = " ".join(words)
         if phrase and len(phrase) <= 60:
             cleaned.append(phrase)
@@ -108,7 +120,9 @@ def _match_details(text: str, words: str, aliases: str = "", *, same_sound: bool
     # Aliases are alternate names for this subject, not a vocabulary pool. Compare one phrase at a time. The stored
     # topic words may accompany an alias so "Adam Getgood bass" can match topic "Periphery bass" + alias
     # "Adam Getgood", but "Nolly Getgood bass" cannot be assembled from aliases "Nolly" and "Adam Getgood".
-    if len(wanted) >= 2:
+    # An alias stands in for part of the topic, never all of it: the request must still share one of the topic's own
+    # words. Otherwise "James Hetfield" or "thrash metal" would get the research saved for one Metallica album.
+    if len(wanted) >= 2 and wanted & theirs:
         for alias in _alias_phrases(aliases):
             known = theirs | alias
             if wanted <= known:
@@ -198,7 +212,7 @@ def saved_answer(db: Path, text: str, *, suffix: str = "") -> tuple[str, dict, f
     created), or None. `suffix` narrows the saved answers by the end of their key (research setting and filters).
     A request that describes a sound the saved one didn't gets no saved answer (see match_score's same_sound)."""
     best, best_score = None, 0.0
-    for words, answer, created in cache.by_prefix(db, "result:", cache.CATALOGUE_SECONDS, suffix):
+    for words, answer, created in cache.by_prefix(db, "result:", cache.ANSWER_SECONDS, suffix):
         if not isinstance(answer, dict):
             continue
         aliases = ", ".join(clean_aliases((answer.get("plan") or {}).get("aliases")))
