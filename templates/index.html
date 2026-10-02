@@ -241,9 +241,9 @@
             to create an API token (use the <em>Workers AI</em> template) and find your Account ID in the dashboard.
             Choose a model from the <a href="https://developers.cloudflare.com/workers-ai/models/" target="_blank" rel="noopener">model catalogue</a>;
             text-generation models that don't "think" are fastest.</p>
-          <label class="field">Account ID <input name="cloudflare.account_id" autocomplete="off" spellcheck="false" placeholder="32 hexadecimal characters"></label>
-          <label class="field">API token <input name="cloudflare.api_key" type="password" autocomplete="off"></label>
-          <label class="field">Model <input name="cloudflare.model" autocomplete="off" spellcheck="false" list="cf-models" placeholder="@cf/zai-org/glm-4.7-flash"></label>
+          <label class="field">Account ID <span class="field-required">(required)</span> <input name="cloudflare.account_id" autocomplete="off" spellcheck="false" placeholder="32 hexadecimal characters"></label>
+          <label class="field">API token <span class="field-required">(required)</span> <input name="cloudflare.api_key" type="password" autocomplete="off"></label>
+          <label class="field">Model <span class="field-required">(required)</span> <input name="cloudflare.model" autocomplete="off" spellcheck="false" list="cf-models" placeholder="@cf/zai-org/glm-4.7-flash"></label>
           <datalist id="cf-models"></datalist>
           <details class="model-picks">
             <summary>Suggested models</summary>
@@ -256,9 +256,9 @@
           </details>
         </div>
         <div data-provider="custom" hidden>
-          <label class="field">Base URL <input name="custom.base_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
+          <label class="field">Base URL <span class="field-required">(required)</span> <input name="custom.base_url" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
           <label class="field">API key <input name="custom.api_key" type="password" autocomplete="off" placeholder="Optional for keyless endpoints"></label>
-          <label class="field">Model <input name="custom.model" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini"></label>
+          <label class="field">Model <span class="field-required">(required)</span> <input name="custom.model" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini"></label>
         </div>
       </fieldset>
 
@@ -286,7 +286,7 @@
       </fieldset>
 
       <p id="settings-error" class="t3ai-warning" role="alert" tabindex="-1" hidden></p>
-      <div id="settings-clear-confirm" class="settings-confirm" role="alertdialog" aria-labelledby="clear-confirm-text" hidden>
+      <div id="settings-clear-confirm" class="settings-confirm" role="group" aria-labelledby="clear-confirm-text" hidden>
         <p id="clear-confirm-text"><strong>Clear all settings?</strong> This deletes your saved AI provider, API keys, TONE3000 key and AI tuning from this browser. It cannot be undone, and you will need your keys again to use them.</p>
         <div class="settings-actions">
           <button type="button" id="btn-clear-keep" class="btn btn-secondary btn-small">Keep my settings</button>

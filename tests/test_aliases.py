@@ -6,7 +6,7 @@ import json
 import pytest
 
 import app as app_module
-from tonesearch import ai, knowledge, mcp_server, overrides
+from tonesearch import knowledge, mcp_server, overrides
 
 NOTES = "- Rundown: Nolly runs a Darkglass B7K preamp into a Cali76 compressor. (https://x.example)"
 PLAN = {"summary": "Clean compressed lows under distorted highs.", "advice": [], "search_queries": ["Darkglass B7K"],
@@ -82,3 +82,14 @@ def test_admin_edits_aliases(monkeypatch):
     app_module.app.test_client().post(f"/admin/entries/{entry_id}", data=form, headers=auth)
     assert knowledge.get(app_module._library(), entry_id)["aliases"] == "steven wilson, absentia, 2002"  # "in" is filler
     assert knowledge.find(app_module._library(), "Steven Wilson In Absentia")["id"] == entry_id
+
+
+def test_a_plan_saved_by_older_rules_is_worked_out_again_and_fills_the_aliases(calls):
+    from tonesearch import cache
+    db = app_module._library()
+    entry_id = knowledge.save(db, "Periphery bass", NOTES)  # research saved without aliases, as the old rules did
+    words = " ".join(knowledge.topic_words("Periphery bass"))
+    cache.put(db, f"plan:{words}:True", {**PLAN, "aliases": []}, words)  # the old rules' plan, under the old key
+    _search("Periphery bass")
+    assert calls["plan"] == 1  # not reused
+    assert knowledge.get(db, entry_id)["aliases"] == "nolly, adam getgood, periphery"

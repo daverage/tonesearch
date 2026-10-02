@@ -120,6 +120,6 @@ def test_suggested_aliases_follow_the_same_rules_as_new_searches(monkeypatch):
     gear = [{"kind": "amp", "name": "Diezel VH4", "role": "main amp", "confidence": "best"}]
     assert ai.suggest_aliases("Knights of Cydonia", notes, gear, opener=lambda req, timeout: _Reply()) == [
         "Muse", "Matt Bellamy"]  # not an album the research never mentions, gear or a category
-    reply["aliases"] = ["Beatles"]
+    reply.update(aliases=["Beatles"], keywords=["gigging stereo combo", "Beatles AC30 combo"])
     assert ai.suggest_aliases("stereo combo for gigging, pedal platform", "- The Beatles used AC30 combos. (https://x)",
-                              [], opener=lambda req, timeout: _Reply()) == []
+                              [], opener=lambda req, timeout: _Reply()) == ["gigging stereo combo"]

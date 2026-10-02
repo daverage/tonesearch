@@ -249,3 +249,11 @@ def test_activity_counts_show_what_was_skipped(calls, monkeypatch):
     assert '<a href="admin?view=activity" aria-current="page">Activity</a>' in page
     assert "Research library" in page  # the nav, but not the library list
     assert "Also found as" not in page
+
+
+def test_saved_answers_are_narrowed_by_the_end_of_their_key(tmp_path):
+    db = tmp_path / "k.sqlite3"
+    cache.put(db, "result:bad cat:True:{}", {"topic": "with research"}, "bad cat")
+    cache.put(db, "result:bad cat:False:{}", {"topic": "without"}, "bad cat")
+    assert [a["topic"] for _, a, _ in cache.by_prefix(db, "result:", 60, ":False:{}")] == ["without"]
+    assert len(cache.by_prefix(db, "result:", 60)) == 2

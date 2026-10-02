@@ -335,6 +335,18 @@ def test_pack_download_is_a_zip(client, monkeypatch):
     assert sorted(archive.namelist()) == ["Edge (2).nam", "Edge.nam"] and archive.read("Edge.nam") == b"one"
 
 
+def test_a_pack_too_large_to_zip_is_refused(monkeypatch):
+    monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
+    monkeypatch.setattr(research, "_is_safe_public_host", lambda host: True)
+    monkeypatch.setattr(research, "MAX_ZIP_BYTES", 5)
+    models = {"data": [{"id": 1, "name": "A", "model_url": "https://s.example/1.nam"},
+                       {"id": 2, "name": "B", "model_url": "https://s.example/2.nam"}]}
+    http = _Http({f"{research.TONE3000_BASE}/models": models, "https://s.example/1.nam": b"one",
+                  "https://s.example/2.nam": b"two"})
+    with pytest.raises(RuntimeError, match="too large"):
+        research.tone3000_pack_zip(5, opener=http)
+
+
 def test_a_visitors_own_key_is_always_used_for_downloads(client, monkeypatch):
     monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
     seen = []

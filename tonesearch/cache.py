@@ -17,18 +17,24 @@ import sys
 import time
 from pathlib import Path
 
+from tonesearch import db as database
+
 CATALOGUE_SECONDS = float(os.environ.get("TONESEARCH_CATALOGUE_HOURS", "24")) * 3600
 AI_SECONDS = float(os.environ.get("TONESEARCH_AI_CACHE_DAYS", "30")) * 86400
 REFERENCE_SECONDS = 7 * 86400
 _LONGEST = max(CATALOGUE_SECONDS, AI_SECONDS, REFERENCE_SECONDS)  # rows older than this are never read again
 
 
-def _connect(db: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db, timeout=5)
+def _setup(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, words TEXT NOT NULL DEFAULT '',"
                        " value TEXT NOT NULL, created REAL NOT NULL)")
     connection.execute("CREATE INDEX IF NOT EXISTS cache_words ON cache (words)")
-    return connection
+    connection.execute("CREATE TABLE IF NOT EXISTS activity (day TEXT NOT NULL, event TEXT NOT NULL,"
+                       " n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, event))")
+
+
+def _connect(db: Path):
+    return database.connect(db, _setup)
 
 
 def get(db: Path | None, key: str, max_age: float):
@@ -102,8 +108,6 @@ def count(db: Path | None, event: str) -> None:
         return
     try:
         with _connect(db) as connection:
-            connection.execute("CREATE TABLE IF NOT EXISTS activity (day TEXT NOT NULL, event TEXT NOT NULL,"
-                               " n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, event))")
             connection.execute("INSERT INTO activity (day, event, n) VALUES (?, ?, 1)"
                                " ON CONFLICT (day, event) DO UPDATE SET n = n + 1",
                                (time.strftime("%Y-%m-%d", time.gmtime()), event))
@@ -116,8 +120,6 @@ def activity(db: Path, days: int = 14) -> dict:
     since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - (days - 1) * 86400))
     try:
         with _connect(db) as connection:
-            connection.execute("CREATE TABLE IF NOT EXISTS activity (day TEXT NOT NULL, event TEXT NOT NULL,"
-                               " n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, event))")
             rows = connection.execute("SELECT day, event, n FROM activity WHERE day >= ? ORDER BY day DESC",
                                       (since,)).fetchall()
     except sqlite3.Error:
@@ -128,15 +130,19 @@ def activity(db: Path, days: int = 14) -> dict:
     return result
 
 
-def by_prefix(db: Path | None, prefix: str, max_age: float) -> list[tuple[str, object, float]]:
-    """(words, value, created) for every unexpired value whose key starts with `prefix`, newest first."""
+def by_prefix(db: Path | None, prefix: str, max_age: float, suffix: str = "") -> list[tuple[str, object, float]]:
+    """(words, value, created) for every unexpired value whose key starts with `prefix` (and ends with `suffix`),
+    newest first. The suffix is matched in SQL, so values that can't match are never decoded."""
     if db is None:
         return []
     try:
         with _connect(db) as connection:
-            rows = connection.execute(
-                "SELECT words, value, created FROM cache WHERE key >= ? AND key < ? AND created >= ?"
-                " ORDER BY created DESC", (prefix, prefix + "\uffff", time.time() - max_age)).fetchall()
+            sql, params = "SELECT words, value, created FROM cache WHERE key >= ? AND key < ? AND created >= ?", [
+                prefix, prefix + "\uffff", time.time() - max_age]
+            if suffix:
+                sql += " AND substr(key, -?) = ?"
+                params += [len(suffix), suffix]
+            rows = connection.execute(sql + " ORDER BY created DESC", params).fetchall()
     except sqlite3.Error as exc:
         print(f"Cache unavailable: {exc}", file=sys.stderr)
         return []

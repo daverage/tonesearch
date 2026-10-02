@@ -72,7 +72,8 @@ def _rank_tone3000_metadata(query: str, result: dict) -> tuple[int, str]:
     description_hits = sorted((terms & description_terms) - set(title_hits))
     matched_weight = 2 * len(title_hits) + len(description_hits)
     score = round(100 * matched_weight / (2 * len(terms))) if terms else 0
-    reason = "Metadata matches " + ", ".join(title_hits + [term for term in description_hits if term not in title_hits]) if (title_hits or description_hits) else "Limited catalogue metadata; inspect the pack description"
+    reason = ("Metadata matches " + ", ".join(title_hits + description_hits) if title_hits or description_hits
+              else "Limited catalogue metadata; inspect the pack description")
     return score, reason + "."
 
 
@@ -533,10 +534,11 @@ def _extract_evidence(html: str, topic: str, forum: bool = False, url: str = "")
     are useful for this request; the AI planner still decides what the evidence means.
     """
     text, _ = _main_text(html, url, forum)
-    if not text.strip() or not _about_music(_page_title(html), text):
+    title = _page_title(html)
+    if not text.strip() or not _about_music(title, text):
         return ""
     topic_words = _topic_words(topic)
-    opening = set(re.findall(r"[a-z0-9']+", (_page_title(html) + " " + text[:3000]).lower()))
+    opening = set(re.findall(r"[a-z0-9']+", (title + " " + text[:3000]).lower()))
     on_topic = len(opening & topic_words) >= min(2, len(topic_words))
     page_on_topic, thread_on_topic = on_topic and not forum, forum and on_topic
     blocks = _content_blocks(text)
@@ -744,6 +746,17 @@ def _require_tone3000_api_key(*, for_action: str) -> str:
     return api_key
 
 
+def _tone3000_get(path: str, params: dict | None, api_key: str, *, opener, timeout: int, failure: str) -> object:
+    """A TONE3000 API reply as JSON. Any failure raises RuntimeError("<failure>: <reason>")."""
+    url = f"{TONE3000_BASE}/{path}" + (f"?{urlencode(params)}" if params else "")
+    request = Request(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    try:
+        with opener(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"{failure}: {exc}") from exc
+
+
 _TONE3000_LINK_PREFIXES = ("https://api.tone3000.com/", "https://www.tone3000.com/")
 
 
@@ -851,16 +864,10 @@ def tone3000_search(query: str, *, filters: dict | None = None, rank_query: str 
     """
     api_key = _require_tone3000_api_key(for_action="search")
     params = _search_params(query, {**DEFAULT_FILTERS, **(filters or {})})
-    request = Request(
-        f"{TONE3000_BASE}/tones/search?{urlencode(params)}",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
+
     def fetch():
-        try:
-            with opener(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError(f"TONE3000 search failed: {exc}") from exc
+        payload = _tone3000_get("tones/search", params, api_key, opener=opener, timeout=20,
+                                failure="TONE3000 search failed")
         tones = payload.get("data", []) if isinstance(payload, dict) else []
         return [tone for tone in tones if isinstance(tone, dict)]
     # Public catalogue data, the same for every key, so it's shared between visitors and the MCP server.
@@ -919,17 +926,13 @@ def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", opener=ur
     models: list[dict] = []
     page = 1
     while len(models) < MAX_MODELS:
-        request = Request(
-            f"{TONE3000_BASE}/models?{urlencode(_models_params(tone_id, architecture, page))}",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        )
         try:
-            with opener(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:
+            payload = _tone3000_get("models", _models_params(tone_id, architecture, page), api_key, opener=opener,
+                                    timeout=20, failure="TONE3000 pack details failed")
+        except RuntimeError:
             if models:  # keep what we have rather than failing the whole pack on a later page
                 break
-            raise RuntimeError(f"TONE3000 pack details failed: {exc}") from exc
+            raise
         batch = payload.get("data", []) if isinstance(payload, dict) else []
         models.extend(batch)
         total_pages = payload.get("total_pages") if isinstance(payload, dict) else None
@@ -941,13 +944,9 @@ def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", opener=ur
 
 def tone3000_models(tone_id: int, *, architecture: str = "2", opener=urlopen, cache_db=None) -> list[dict]:
     """Return model names for one public TONE3000 tone pack, never credentials or download links."""
-    key = f"models:{tone_id}:{architecture}"
-    saved = cache.get(cache_db, key, cache.REFERENCE_SECONDS)
-    if saved:
-        return saved
-    models = _tone3000_model_names(tone_id, architecture, opener)
-    cache.put(cache_db, key, models)  # names only: download links may be signed and short-lived
-    return models
+    # Names only are saved: download links may be signed and short-lived.
+    return cache.remember(cache_db, f"models:{tone_id}:{architecture}",
+                          lambda: _tone3000_model_names(tone_id, architecture, opener), cache.REFERENCE_SECONDS)
 
 
 def _tone3000_model_names(tone_id: int, architecture: str, opener) -> list[dict]:
@@ -1018,11 +1017,10 @@ def _find_model(tone_id: int, model_id: int, architecture: str, opener=None) -> 
         if model and _model_link(model):
             return model
     api_key = _require_tone3000_api_key(for_action="downloads")
-    request = Request(f"{TONE3000_BASE}/models/{model_id}", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
     try:
-        with (opener or urlopen)(request, timeout=20) as response:
-            model = json.loads(response.read().decode("utf-8"))
-    except Exception:
+        model = _tone3000_get(f"models/{model_id}", None, api_key, opener=opener or urlopen, timeout=20,
+                              failure="TONE3000 file lookup failed")
+    except RuntimeError:
         return None
     model = model.get("data", model) if isinstance(model, dict) else None
     if isinstance(model, dict) and model.get("tone_id") not in (None, tone_id):
@@ -1040,6 +1038,7 @@ def tone3000_model_download(tone_id: int, model_id: int, *, architecture: str = 
 
 
 MAX_ZIP_FILES = 60
+MAX_ZIP_BYTES = 250_000_000  # the whole pack, downloaded and zipped in this server's memory
 
 
 def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -> tuple[bytes, int]:
@@ -1051,12 +1050,17 @@ def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -
     if len(models) > MAX_ZIP_FILES:
         raise RuntimeError(f"This pack has {len(models)} files; packs over {MAX_ZIP_FILES} are best downloaded on TONE3000.")
     api_key = _require_tone3000_api_key(for_action="downloads")
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        files = list(pool.map(lambda m: _fetch_file(_model_link(m), api_key, opener), models))
     buffer = io.BytesIO()
     used: set = set()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+    total = 0
+    # Each file is compressed into the archive as it arrives, so the raw downloads are never all held at once.
+    with ThreadPoolExecutor(max_workers=6) as pool, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        files = pool.map(lambda m: _fetch_file(_model_link(m), api_key, opener), models)
         for model, data in zip(models, files):
+            total += len(data)
+            if total > MAX_ZIP_BYTES:
+                pool.shutdown(wait=False, cancel_futures=True)  # don't fetch the files that are still queued
+                raise RuntimeError("This pack is too large to zip here; download it on TONE3000 instead.")
             base = re.sub(r"[^\w .()\[\]-]+", "_", str(model.get("name") or model.get("id"))).strip() or str(model.get("id"))
             ext = "" if re.search(r"\.(nam|wav|json)$", base, re.IGNORECASE) else ".nam"
             name, n = f"{base}{ext}", 2
@@ -1072,29 +1076,14 @@ LOOKUP_KINDS = {"makes": "makes", "tags": "tags", "creators": "users"}
 
 def tone3000_lookup(kind: str, query: str, *, opener=urlopen, cache_db=None) -> list[dict]:
     """Catalogue suggestions for the filter fields: [{"value", "label", "count"}], most used first."""
-    if cache_db is not None:
-        key = f"lookup:{kind}:{query.lower()}"
-        saved = cache.get(cache_db, key, cache.REFERENCE_SECONDS)
-        if saved is None:
-            saved = _tone3000_lookup(kind, query, opener=opener)
-            cache.put(cache_db, key, saved)
-        return saved
-    return _tone3000_lookup(kind, query, opener=opener)
+    return cache.remember(cache_db, f"lookup:{kind}:{query.lower()}", lambda: _tone3000_lookup(kind, query, opener=opener),
+                          cache.REFERENCE_SECONDS)
 
 
 def _tone3000_lookup(kind: str, query: str, *, opener=urlopen) -> list[dict]:
-    """Catalogue suggestions for the filter fields: [{"value", "label", "count"}], most used first."""
-    endpoint = LOOKUP_KINDS[kind]
     api_key = _require_tone3000_api_key(for_action="search")
-    params = {"query": query, "page": 1, "page_size": 10}
-    params["sort"] = "tones"
-    request = Request(f"{TONE3000_BASE}/{endpoint}?{urlencode(params)}",
-                      headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
-    try:
-        with opener(request, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        raise RuntimeError(f"TONE3000 suggestions failed: {exc}") from exc
+    payload = _tone3000_get(LOOKUP_KINDS[kind], {"query": query, "page": 1, "page_size": 10, "sort": "tones"}, api_key,
+                            opener=opener, timeout=10, failure="TONE3000 suggestions failed")
     items = payload.get("data", []) if isinstance(payload, dict) else []
     suggestions = []
     for item in items:

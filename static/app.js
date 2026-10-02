@@ -18,12 +18,11 @@
 
   const state = { history: [], goal: "", busy: false, plan: null, searchedFilters: null, log: [], packChats: new Map() };
   const GEAR_LABELS = { amp: "Amp head", "amp-cab": "Full rig", amp_cab: "Full rig", "full-rig": "Full rig", pedal: "Pedal", outboard: "Outboard", ir: "IR" };
-  // How sure the research is that the gear made this tone; unlabelled (older) gear counts as the artist's.
   // How well each item answers the request; older saved answers use confirmed / artist / suggested.
   const CONFIDENCE_LABELS = { best: "(best match)", close: "(close match)", alternative: "(alternative)" };
   const OLD_LEVELS = { confirmed: "best", artist: "close", suggested: "alternative" };
   const confidence = (g) => OLD_LEVELS[g.confidence] || (g.confidence in CONFIDENCE_LABELS ? g.confidence : "close");
-  const confidenceLabel = (plan, g) => CONFIDENCE_LABELS[confidence(g)];
+  const confidenceLabel = (g) => CONFIDENCE_LABELS[confidence(g)];
   const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", mic: "Mics", other: "Other" };
 
   const el = (tag, className, text) => {
@@ -31,6 +30,20 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = text;
     return node;
+  };
+  // A message bubble. Who said it is only shown by its side and colour, so screen readers hear it (WCAG 1.3.1).
+  const bubble = (className, speaker, text) => {
+    const node = el("div", className);
+    node.append(el("span", "visually-hidden", `${speaker}: `), text);
+    return node;
+  };
+  // Replaces a control that had focus, such as a button that has done its job, with a message that takes the focus,
+  // so keyboard and screen reader users aren't thrown back to the top of the page (WCAG 2.4.3).
+  const replaceFocused = (control, message) => {
+    const hadFocus = control.contains(document.activeElement);
+    message.tabIndex = -1;
+    control.replaceWith(message);
+    if (hadFocus) message.focus();
   };
   // Links that open a new tab say so to screen reader users (WCAG G201).
   const newTab = (link, rel = "noopener noreferrer") => {
@@ -111,6 +124,21 @@
     }
   }
 
+  // Hands a downloaded file to the browser's own download, then frees it.
+  const saveBlob = (blob, filename) => {
+    const link = el("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  };
+  // One research note: "- title: extract (url)". Returns [title, extract, url], or null for a plain line.
+  const parseNote = (line) => {
+    const parts = /^- (.*?): ([\s\S]*) \((https?:\/\/[^\s)]+)\)$/.exec(line);
+    return parts && parts.slice(1);
+  };
   const compact = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
   const post = async (url, body) => {
     const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...settingsHeaders() }, body: JSON.stringify(body) });
@@ -154,7 +182,7 @@
     state.busy = busy;
     searchBtn.setAttribute("aria-disabled", String(busy));
     promptEl.readOnly = busy;
-    section.setAttribute("aria-busy", String(busy));
+    grid.setAttribute("aria-busy", String(busy)); // not the whole section: that would silence the progress status
   }
 
   // Shows the request at once with a working card; earlier turns shrink to a two-line summary.
@@ -164,7 +192,7 @@
     const turn = el("div", "t3ai-turn");
     const pending = el("div", "t3ai-brief t3ai-pending");
     pending.setAttribute("role", "status");
-    turn.append(el("div", "t3ai-you", prompt), pending);
+    turn.append(bubble("t3ai-you", "You asked", prompt), pending);
     thread.append(turn);
     turn.scrollIntoView({ behavior: motion(), block: "start" });
     return { turn, pending };
@@ -213,7 +241,7 @@
           if (g.role) { chip.title = g.role; chip.append(el("span", "visually-hidden", `: ${g.role}`)); } // the tooltip is mouse-only
           const level = confidence(g);
           chip.dataset.confidence = level;
-          chip.append(el("span", "t3ai-chip-note", ` ${confidenceLabel(plan, g)}`));
+          chip.append(el("span", "t3ai-chip-note", ` ${confidenceLabel(g)}`));
           row.append(chip);
         });
         gear.append(row);
@@ -257,8 +285,15 @@
     const no = el("button", "btn btn-secondary btn-small", "No");
     [yes, no].forEach((b) => { b.type = "button"; });
     const libraryId = data.library ? data.library.id : null;
-    const done = (text) => { box.replaceChildren(el("p", "t3ai-meta", text)); announce(text); };
-    const fail = (error) => { box.append(el("p", "t3ai-warning", error.message)); };
+    const done = (text) => {
+      const thanks = el("p", "t3ai-meta", text);
+      const hadFocus = box.contains(document.activeElement);
+      thanks.tabIndex = -1;
+      box.replaceChildren(thanks);
+      if (hadFocus) thanks.focus();
+      announce(text);
+    };
+    const fail = (error) => { box.append(el("p", "t3ai-warning", error.message)); announce(error.message); };
     yes.addEventListener("click", () => sendFeedback({ target: "brief", vote: 1, library_id: libraryId })
       .then(() => done("Thanks for the feedback.")).catch(fail));
     no.addEventListener("click", () => {
@@ -288,7 +323,7 @@
           await sendFeedback({ target: "pack", vote, pack_id: pack.id, pack_title: pack.title });
           choices.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
           announce(`Rated ${pack.title}: ${text}.`);
-        } catch (error) { box.append(el("p", "t3ai-warning", error.message)); }
+        } catch (error) { box.append(el("p", "t3ai-warning", error.message)); announce(error.message); }
       });
       return button;
     });
@@ -320,11 +355,12 @@
     const list = el("ul");
     lines.forEach((line) => {
       const item = el("li");
-      const parts = /^- (.*?): ([\s\S]*) \((https?:\/\/[^\s)]+)\)$/.exec(line);
-      if (parts) {
-        const link = el("a", null, parts[1] || parts[3]);
-        link.href = parts[3]; newTab(link, "noopener noreferrer nofollow");
-        item.append(link, el("p", null, parts[2]));
+      const note = parseNote(line);
+      if (note) {
+        const [title, text, url] = note;
+        const link = el("a", null, title || url);
+        link.href = url; newTab(link, "noopener noreferrer nofollow");
+        item.append(link, el("p", null, text));
       } else {
         item.textContent = line.replace(/^- /, "");
       }
@@ -337,16 +373,13 @@
       report.addEventListener("click", async () => {
         report.disabled = true;
         try {
-          const response = await fetch(`api/library/${library.id}/flag`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-          });
-          const data = await response.json().catch(() => ({}));
-          if (!response.ok) throw new Error(data.error || `Report failed (${response.status})`);
-          report.replaceWith(el("p", "t3ai-meta", "Thanks. This research won't be reused until it's been checked."));
+          await post(`api/library/${library.id}/flag`, {});
+          replaceFocused(report, el("p", "t3ai-meta", "Thanks. This research won't be reused until it's been checked."));
           announce("Research reported.");
         } catch (error) {
           report.disabled = false;
           report.after(el("p", "t3ai-warning", error.message));
+          announce(error.message);
         }
       });
       details.append(report);
@@ -463,15 +496,8 @@
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Download failed (${response.status})`);
       }
-      const blob = await response.blob();
       const named = /filename="?([^";]+)"?/i.exec(response.headers.get("Content-Disposition") || "");
-      const link = el("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = named ? named[1] : `${model.name}.nam`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      saveBlob(await response.blob(), named ? named[1] : `${model.name}.nam`);
     } catch (error) {
       row.append(el("p", "t3ai-warning", error.message));
       announce(error.message);
@@ -506,13 +532,7 @@
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Download failed (${response.status})`);
       }
-      const link = el("a");
-      link.href = URL.createObjectURL(await response.blob());
-      link.download = `${pack.title.replace(/[^\w .()-]+/g, "_").trim() || "tone3000-pack"}.zip`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      saveBlob(await response.blob(), `${pack.title.replace(/[^\w .()-]+/g, "_").trim() || "tone3000-pack"}.zip`);
       announce(`Downloading ${pack.title}.`);
     } catch (error) {
       column.append(el("p", "t3ai-warning", error.message));
@@ -596,6 +616,7 @@
     chatHead.append(el("h4", null, "Ask about this pack"));
     const log = el("div", "t3ai-chat-log"); // replies are read out by the announcer, not a live log
     log.setAttribute("role", "log");
+    log.setAttribute("aria-live", "off"); // role=log is polite by default; replies are read once, by announce()
     log.setAttribute("aria-label", `Conversation about ${pack.title}`);
     log.tabIndex = 0; // scrollable, so keyboard users can reach and scroll it
     const empty = el("p", "t3ai-chat-empty", "Ask which file suits your tone, what the file names mean, or how this pack compares.");
@@ -624,7 +645,7 @@
       if (!question || ask.disabled) return;
       ask.disabled = true; input.disabled = true;
       empty.remove();
-      log.append(el("div", "t3ai-you", question));
+      log.append(bubble("t3ai-you", "You asked", question));
       const thinking = el("div", "t3ai-ai is-thinking");
       const spinner = el("span", "spinner");
       spinner.setAttribute("aria-hidden", "true");
@@ -637,7 +658,7 @@
           tone_id: pack.id, question, tone_goal: state.goal, history, architecture: packArchitecture(),
           pack: { title: pack.title, creator: pack.creator, description: pack.description, tags: pack.tags || [] },
         });
-        thinking.className = "t3ai-ai"; thinking.textContent = data.reply;
+        thinking.className = "t3ai-ai"; thinking.replaceChildren(el("span", "visually-hidden", "AI: "), data.reply);
         history.push({ role: "user", content: question }, { role: "assistant", content: data.reply });
         if (!state.packChats.has(pack.id)) state.packChats.set(pack.id, { pack, messages: [] });
         state.packChats.get(pack.id).messages.push({ question, reply: data.reply, picks: data.recommended_files, at: new Date() });
@@ -648,6 +669,7 @@
         announce(data.reply);
       } catch (error) {
         thinking.className = "t3ai-warning"; thinking.textContent = error.message;
+        announce(error.message);
       } finally {
         ask.disabled = false; input.disabled = false; input.focus();
         scrollLog();
@@ -691,7 +713,6 @@
       promptEl.placeholder = "e.g. a bit more gain for solos";
       resetBtn.hidden = false;
     } catch (error) {
-      stop();
       failTurn(turn, error.message);
       announce(error.message);
     } finally {
@@ -707,6 +728,7 @@
     state.history = state.history.slice(0, -2); // a saved answer is only ever the first search
     if (!state.history.length) { state.goal = ""; state.plan = null; }
     turn.remove();
+    promptEl.focus();
     search({ fresh: true, text: data.topic });
   }
 
@@ -784,9 +806,11 @@
       renderResults(data);
       state.log.push({ kind: "filters", at: new Date(), data });
       announce(status.textContent);
-      grid.hidden || grid.scrollIntoView({ behavior: motion(), block: "start" });
+      if (!grid.hidden) {
+        grid.scrollIntoView({ behavior: motion(), block: "start" });
+        if (!document.activeElement || document.activeElement === document.body) grid.focus({ preventScroll: true });
+      }
     } catch (error) {
-      stop();
       status.textContent = error.message;
       announce(error.message);
     } finally {
@@ -831,7 +855,7 @@
         Object.keys(KIND_LABELS).forEach((kind) => {
           const items = data.plan.gear.filter((g) => g.kind === kind);
           if (!items.length) return;
-          const names = items.map((g) => `${md(g.name)} ${confidenceLabel(data.plan, g)}${g.role ? `: ${md(g.role)}` : ""}`);
+          const names = items.map((g) => `${md(g.name)} ${confidenceLabel(g)}${g.role ? `: ${md(g.role)}` : ""}`);
           out.push(`**${KIND_LABELS[kind]}**`, "", ...names.map((n) => `- ${n}`), "");
         });
       }
@@ -840,8 +864,8 @@
       if (data.research_notes) {
         out.push("**Web research sources**", "");
         data.research_notes.split("\n").filter(Boolean).forEach((line) => {
-          const parts = /^- (.*?): ([\s\S]*) \((https?:\/\/[^\s)]+)\)$/.exec(line);
-          out.push(parts ? `- ${link(parts[1] || parts[3], parts[3])}: ${md(parts[2])}` : `- ${md(line.replace(/^- /, ""))}`);
+          const note = parseNote(line);
+          out.push(note ? `- ${link(note[0] || note[2], note[2])}: ${md(note[1])}` : `- ${md(line.replace(/^- /, ""))}`);
         });
         out.push("");
       }
@@ -864,13 +888,7 @@
 
   function exportConversation() {
     const stamp = new Date().toISOString().slice(0, 16).replace("T", "-").replace(":", "");
-    const link = el("a");
-    link.href = URL.createObjectURL(new Blob([exportMarkdown()], { type: "text/markdown;charset=utf-8" }));
-    link.download = `tone-search-${stamp}.md`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    saveBlob(new Blob([exportMarkdown()], { type: "text/markdown;charset=utf-8" }), `tone-search-${stamp}.md`);
     announce("Conversation exported as a Markdown file.");
   }
   exportBtn.addEventListener("click", exportConversation);
@@ -912,8 +930,10 @@
     const fields = [...form.querySelectorAll("input[name]")];
 
     const read = (s, name) => name.split(".").reduce((v, k) => (v || {})[k], s) || "";
+    const REQUIRED = ["cloudflare.account_id", "cloudflare.api_key", "cloudflare.model", "custom.base_url", "custom.model"];
     const showProvider = () => {
       form.querySelectorAll("[data-provider]").forEach((g) => { g.hidden = g.dataset.provider !== providerEl.value; });
+      REQUIRED.forEach((name) => form.elements[name].setAttribute("aria-required", String(name.startsWith(`${providerEl.value}.`))));
       form.querySelector("[data-tuning]").hidden = !providerEl.value && !localModel;
     };
     const limitStatus = document.getElementById("settings-limit-status");
@@ -930,7 +950,11 @@
       if (own.tone3000) return ["partial", "TONE3000 key set. Add your own AI key to remove the hourly limit."];
       return ["none", "Using this site's keys: the hourly limit applies."];
     };
-    const showLimit = (s) => { const [state, text] = describeLimit(s); limitStatus.dataset.state = state; limitStatus.textContent = text; };
+    const showLimit = (s) => {
+      const [state, text] = describeLimit(s);
+      limitStatus.dataset.state = state;
+      if (limitStatus.textContent !== text) limitStatus.textContent = text; // a live region: don't repeat it on every key
+    };
     const reflect = () => {
       const ownAi = settings.provider === "cloudflare" || settings.provider === "custom";
       const own = ownKeys(settings);
@@ -942,6 +966,7 @@
       providerEl.value = settings.provider || "";
       fields.forEach((input) => { input.value = read(settings, input.name); });
       error.hidden = true;
+      clearInvalid();
       showProvider();
       showLimit(settings);
     };
@@ -955,15 +980,20 @@
       });
       return next;
     };
+    // [field name, message] for the first problem, or null.
     const problem = (s) => {
       const ai = s[s.provider] || {};
-      if (s.provider && !ai.model) return "Enter the AI model name.";
-      if (s.provider === "cloudflare" && !/^[0-9a-f]{32}$/i.test(ai.account_id)) return "The Cloudflare account ID must be 32 hexadecimal characters.";
-      if (s.provider === "cloudflare" && !ai.api_key) return "Enter your Cloudflare API token.";
-      if (s.provider === "custom" && !/^https:\/\/\S+$/i.test(ai.base_url)) return "The base URL must start with https://";
-      if (s.tone3000_api_key && !s.tone3000_api_key.startsWith("t3k_cs_")) return "The TONE3000 key must be a secret key starting with t3k_cs_.";
-      return "";
+      if (s.provider && !ai.model) return [`${s.provider}.model`, "Enter the AI model name."];
+      if (s.provider === "cloudflare" && !/^[0-9a-f]{32}$/i.test(ai.account_id)) return ["cloudflare.account_id", "The Cloudflare account ID must be 32 hexadecimal characters."];
+      if (s.provider === "cloudflare" && !ai.api_key) return ["cloudflare.api_key", "Enter your Cloudflare API token."];
+      if (s.provider === "custom" && !/^https:\/\/\S+$/i.test(ai.base_url)) return ["custom.base_url", "The base URL must start with https://"];
+      if (s.tone3000_api_key && !s.tone3000_api_key.startsWith("t3k_cs_")) return ["tone3000_api_key", "The TONE3000 key must be a secret key starting with t3k_cs_."];
+      return null;
     };
+    const clearInvalid = () => fields.forEach((input) => {
+      input.removeAttribute("aria-invalid");
+      input.removeAttribute("aria-errormessage");
+    });
     const save = (next) => {
       settings = next;
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch { /* private mode: keep for this page only */ }
@@ -1022,12 +1052,17 @@
     dialog.addEventListener("close", () => { confirmBox.hidden = true; mainActions.hidden = false; });
     form.addEventListener("submit", (event) => {
       const next = collect();
-      const message = problem(next);
-      if (message) {
+      const found = problem(next);
+      clearInvalid();
+      if (found) {
+        const [name, message] = found;
+        const input = form.elements[name];
         event.preventDefault();
         error.textContent = message;
         error.hidden = false;
-        error.focus();
+        input.setAttribute("aria-invalid", "true");
+        input.setAttribute("aria-errormessage", error.id);
+        input.focus(); // the alert reads the message; focus goes where it can be fixed
         return;
       }
       save(next);

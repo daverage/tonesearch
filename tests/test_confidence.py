@@ -153,10 +153,12 @@ def test_requirement_requests_keep_the_models_gear_but_no_stray_aliases():
         "requirements": ["combo with speakers", "stereo", "clean headroom for pedals"],
         "search_queries": ["Roland JC-40", "Fender Deluxe Reverb"],
         "aliases": ["blackface deluxe reverb", "british invasion", "beatles"],
+        "keywords": ["stereo gigging combo", "pedal platform combo amp", "Roland JC-40"],
         "gear": [{"kind": "amp", "name": "Roland JC-40", "confidence": "best"},
                  {"kind": "amp", "name": "Fender Deluxe Reverb", "role": "mono", "confidence": "close"},
                  {"kind": "other", "name": "DSM Humboldt Simplifier MKII", "confidence": "alternative"}]})
-    assert plan["requirements"][1] == "stereo" and plan["aliases"] == []  # no names in the request
+    assert plan["requirements"][1] == "stereo"
+    assert plan["aliases"] == ["stereo gigging combo", "pedal platform combo amp"]  # wordings, never names or gear
     assert [g["name"] for g in plan["gear"]] == ["Roland JC-40", "Fender Deluxe Reverb", "DSM Humboldt Simplifier MKII"]
     assert plan["search_queries"] == ["Roland JC-40", "Fender Deluxe Reverb"]
 
@@ -171,11 +173,20 @@ def test_artist_requests_keep_their_pedals_and_aliases():
     assert plan["aliases"] == ["David Gilmour", "Pink Floyd", "The Wall"]
 
 
-def test_a_described_sound_keeps_its_pedals_but_gets_no_aliases():
+def test_a_described_sound_keeps_its_pedals_and_gets_keywords_but_no_names():
     plan = _recommend("chimey jangly clean with a fuzz edge", {
         "summary": "s", "advice": [], "search_queries": ["Vox AC30"], "aliases": ["Beatles"],
+        "keywords": ["jangly chimey clean with fuzz edge", "Beatles jangle", "Vox AC30 chime"],
         "gear": [{"kind": "amp", "name": "Vox AC30"}, {"kind": "effect", "name": "Vox Tone Bender"}]})
-    assert [g["name"] for g in plan["gear"]] == ["Vox AC30", "Vox Tone Bender"] and plan["aliases"] == []
+    assert [g["name"] for g in plan["gear"]] == ["Vox AC30", "Vox Tone Bender"]
+    assert plan["aliases"] == ["jangly chimey clean with fuzz edge"]  # a rewording; not an artist or gear
+
+
+def test_keywords_must_be_mostly_the_requests_own_words():
+    notes = "Jimi Hendrix was a master of the edge of breakup."
+    kept = ai.filter_aliases("edge breakup blues", [], evidence=notes, gear=[{"name": "Marshall Bluesbreaker", "role": ""}],
+                             keywords=["edge of break-up blues", "breakup blues", "Jimi Hendrix blues", "Bluesbreaker"])
+    assert kept == ["edge of break-up blues", "breakup blues"]
 
 
 def test_requirement_requests_research_specs_not_rigs(monkeypatch):

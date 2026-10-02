@@ -17,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 
+from tonesearch import cache
+from tonesearch import db as database
 from tonesearch.research import _topic
 
 STATUSES = ("new", "approved", "flagged")
@@ -129,9 +131,7 @@ def match_score(text: str, words: str, aliases: str = "", *, same_sound: bool = 
     return _match_details(text, words, aliases, same_sound=same_sound)[0]
 
 
-def _connect(db: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db, timeout=5)
-    connection.row_factory = sqlite3.Row
+def _setup(connection: sqlite3.Connection) -> None:
     connection.execute("""CREATE TABLE IF NOT EXISTS entries (
         id INTEGER PRIMARY KEY, topic TEXT NOT NULL, words TEXT NOT NULL UNIQUE, notes TEXT NOT NULL,
         gear TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'new', flags INTEGER NOT NULL DEFAULT 0,
@@ -140,7 +140,10 @@ def _connect(db: Path) -> sqlite3.Connection:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(entries)")}
     if "aliases" not in columns:  # added later: the AI's names for the same rig ("nolly", "steven wilson")
         connection.execute("ALTER TABLE entries ADD COLUMN aliases TEXT NOT NULL DEFAULT ''")
-    return connection
+
+
+def _connect(db: Path):
+    return database.connect(db, _setup, rows=True)
 
 
 def _entry(row) -> dict:
@@ -172,8 +175,9 @@ def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
     oldest = time.time() - UNREVIEWED_DAYS * 86400
     best, best_key = None, (0.0, False, 0, False)
     with _connect(db) as connection:
-        rows = connection.execute(
-            "SELECT * FROM entries WHERE status = 'approved' OR (status = 'new' AND updated >= ?)", (oldest,))
+        # Only what matching needs: notes and gear are read for the winner alone.
+        rows = connection.execute("SELECT id, words, aliases, status FROM entries"
+                                  " WHERE status = 'approved' OR (status = 'new' AND updated >= ?)", (oldest,))
         for row in rows:
             score, matched_words, direct = _match_details(text, row["words"], row["aliases"])
             # Direct topic evidence is safer than alias expansion. Specificity then breaks equal-score matches;
@@ -185,7 +189,23 @@ def find(db: Path, text: str, *, count_use: bool = True) -> dict | None:
             return None
         if count_use:
             connection.execute("UPDATE entries SET uses = uses + 1 WHERE id = ?", (best["id"],))
-    return {**_entry(best), "score": round(best_key[0], 2)}
+        entry = connection.execute("SELECT * FROM entries WHERE id = ?", (best["id"],)).fetchone()
+    return {**_entry(entry), "score": round(best_key[0], 2)}
+
+
+def saved_answer(db: Path, text: str, *, suffix: str = "") -> tuple[str, dict, float] | None:
+    """The website's saved answer for the same rig, found under its topic or any of its aliases: (words, answer,
+    created), or None. `suffix` narrows the saved answers by the end of their key (research setting and filters).
+    A request that describes a sound the saved one didn't gets no saved answer (see match_score's same_sound)."""
+    best, best_score = None, 0.0
+    for words, answer, created in cache.by_prefix(db, "result:", cache.CATALOGUE_SECONDS, suffix):
+        if not isinstance(answer, dict):
+            continue
+        aliases = ", ".join(clean_aliases((answer.get("plan") or {}).get("aliases")))
+        score = match_score(text, words, aliases, same_sound=True)
+        if score > best_score:  # rows come newest first, so ties keep the newest
+            best, best_score = (words, answer, created), score
+    return best
 
 
 @_best_effort
@@ -239,6 +259,13 @@ def flag(db: Path, entry_id: int, reason: str = "") -> bool:
 
 
 # ---- Owner review ---------------------------------------------------------------------------------------------
+
+def counts(db: Path) -> dict:
+    """How many entries there are in all and with each status, for the admin page's filter."""
+    with _connect(db) as connection:
+        found = dict(connection.execute("SELECT status, COUNT(*) FROM entries GROUP BY status").fetchall())
+    return {"all": sum(found.values()), **{status: found.get(status, 0) for status in STATUSES}}
+
 
 def search(db: Path, text: str = "", status: str = "", limit: int = 200) -> list[dict]:
     """Entries for the admin page: flagged first, then newest. `text` is "#8" for one entry, or words found in

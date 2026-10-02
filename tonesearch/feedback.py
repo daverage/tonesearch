@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+from tonesearch import db as database
+
 TARGETS = ("brief", "pack")
 SOURCES = ("web", "mcp")
 _SALT = os.environ.get("TONESEARCH_FEEDBACK_SALT", "tonesearch-feedback")
@@ -21,16 +23,17 @@ def voter(identity: str) -> str:
     return hashlib.sha256(f"{_SALT}:{identity}".encode()).hexdigest()[:16]
 
 
-def _connect(db: Path) -> sqlite3.Connection:
-    connection = sqlite3.connect(db, timeout=5)
-    connection.row_factory = sqlite3.Row
+def _setup(connection: sqlite3.Connection) -> None:
     connection.execute("""CREATE TABLE IF NOT EXISTS feedback (
         id INTEGER PRIMARY KEY, created REAL NOT NULL, voter TEXT NOT NULL, words TEXT NOT NULL,
         prompt TEXT NOT NULL, target TEXT NOT NULL, pack_id INTEGER NOT NULL DEFAULT 0,
         pack_title TEXT NOT NULL DEFAULT '', vote INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '',
         entry_id INTEGER, source TEXT NOT NULL DEFAULT 'web',
         UNIQUE (voter, words, target, pack_id))""")
-    return connection
+
+
+def _connect(db: Path):
+    return database.connect(db, _setup, rows=True)
 
 
 def record(db: Path, *, voter_id: str, words: str, prompt: str, target: str, vote: int, pack_id: int = 0,

@@ -50,20 +50,15 @@ def _gear_line(g: dict) -> str:
     return f"{g.get('kind', '')}: {g.get('name', '')} ({ai.confidence_of(g.get('confidence'))})"
 
 
-def _saved_answer(description: str) -> str:
-    """The website's saved answer for the same rig: its brief and ranked packs, with players' votes."""
-    best, best_score = None, 0.0
-    for words, answer, created in cache.by_prefix(library_path(), "result:", cache.CATALOGUE_SECONDS):
-        aliases = ", ".join(knowledge.clean_aliases((answer.get("plan") or {}).get("aliases")))
-        score = knowledge.match_score(description, words, aliases, same_sound=True)
-        if score > best_score:  # rows come newest first, so ties keep the newest
-            best, best_score = (words, answer, created), score
-    if best is None:
+def _saved_answer(description: str, entry: dict | None) -> str:
+    """The website's saved answer for the same rig: its brief and ranked packs, with players' votes. `entry` is the
+    library's research for the description, which says whether the owner has checked it."""
+    found = knowledge.saved_answer(library_path(), description)
+    if found is None:
         return ""
-    words, answer, created = best
+    words, answer, created = found
     plan, packs = answer.get("plan") or {}, answer.get("results") or []
     feedback.apply_votes(packs, feedback.pack_votes(library_path(), words))
-    entry = knowledge.find(library_path(), description)
     checked = bool(entry and entry["status"] == "approved")
     lines = [f"TONE Search's saved answer for \"{answer.get('topic', words)}\" "
              f"({time.strftime('%d %b %Y', time.gmtime(created))}; packs ranked by the site's AI, then players' votes):",
@@ -92,8 +87,8 @@ def web_research(description: str, *, notes=research.web_notes) -> str:
     description = description.strip()
     if not 0 < len(description) <= 500:
         raise ToolError("Describe the tone in 1-500 characters.")
-    saved = _saved_answer(description)
     entry = knowledge.find(library_path(), description)
+    saved = _saved_answer(description, entry)
     if saved:  # instant: the gear, searches and ranking are already worked out
         cache.count(library_path(), "mcp_answer_saved")
         return saved + (f"\n\nResearch notes:\n{entry['notes']}" if entry else "")
@@ -266,8 +261,9 @@ TOOLS["save_gear"] = (save_gear, "After web_research returned fresh research not
         "confidence": {"type": "string", "enum": list(ai.CONFIDENCE), "description": LEVELS},
     }, "required": ["kind", "name", "confidence"]}},
     "aliases": {"type": "array", "maxItems": 8, "items": {"type": "string"},
-                "description": "Only when the request names an artist, band, song or album: other names for the "
-                               "same rig (e.g. 'Nolly', 'Adam Getgood'). Names only, no sound descriptions or gear."},
+                "description": "Words later searches may use for this: other names for an artist's rig when the "
+                               "request names one (e.g. 'Nolly', 'Adam Getgood'), and other wordings of the request "
+                               "itself ('edge of break-up blues' for 'edge breakup blues'). No gear or genres."},
 }, ["description", "gear"])
 TOOLS["rate_result"] = (rate_result, "Save the user's verdict on a result, when they say whether it was right: "
                                     "the research and brief (leave pack_id out) or one pack. It improves future "
@@ -295,6 +291,8 @@ def _check_key(key: str, *, opener=research.urlopen) -> None:
         research.tone3000_lookup("makes", "amp", opener=opener)
     except RuntimeError as exc:
         raise ToolError("TONE3000 did not accept your key. " + NO_KEY) from exc
+    if len(_CHECKED_KEYS) >= 10_000:  # made-up keys never get here, but don't let the record grow without end
+        _CHECKED_KEYS.clear()
     _CHECKED_KEYS[digest] = time.time()
 
 

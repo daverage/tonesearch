@@ -1,19 +1,18 @@
 /* TONE Search */
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --panel-alt: #fafafc; --border: #e2e4e9;
-  --text: #1b1d23; --text-muted: #666b76; --accent: #4a4ed8; --accent-text: #ffffff;
+  --text: #1b1d23; --text-muted: #5f6470; --accent: #4a4ed8; --accent-text: #ffffff;
   --amp-a: #3366cc; --amp-b: #e67e22; --danger: #c0362c; --good: #17703d;
+  --warn: #a3530b; /* orange for text: --amp-b is only 2.9:1 on white, so it is kept for fills and borders */
   --control-border: #8a8f9a; /* form control edges: at least 3:1 against the panels (WCAG 1.4.11) */
-  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
   --shadow: 0 1px 2px rgba(20, 20, 30, 0.04), 0 4px 16px rgba(20, 20, 30, 0.05);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14151a; --panel: #1c1e25; --panel-alt: #1f2129; --border: #2b2e37;
-    --text: #e7e8ec; --text-muted: #9297a3; --accent: #8b8eff; --accent-text: #14151a;
-    --amp-a: #6c9bff; --amp-b: #ffa759; --danger: #ff7b72; --good: #5fd08a; --control-border: #7a7f8c;
-    --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 38%, transparent);
+    --text: #e7e8ec; --text-muted: #9a9fab; --accent: #8b8eff; --accent-text: #14151a;
+    --amp-a: #6c9bff; --amp-b: #ffa759; --danger: #ff7b72; --good: #5fd08a; --warn: #ffa759; --control-border: #7a7f8c;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 }
@@ -126,6 +125,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); }
 .settings .field input, .settings .field select { width: 100%; padding: 0.45rem 0.55rem; border: 1px solid var(--control-border); border-radius: 6px; background: var(--panel-alt); color: var(--text); font: inherit; font-weight: 400; }
 .settings-actions { display: flex; align-items: center; gap: 0.5rem; }
 .settings-actions .spacer { flex: 1; }
+.field-required { font-weight: 400; color: var(--text-muted); }
 .tuning-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: 0 0.75rem; }
 
 /* Search progress */
@@ -215,7 +215,7 @@ textarea:focus, input:focus, select:focus { border-color: var(--accent); }
 .about h3 { margin: 0 0 0.3rem; font-size: 0.9rem; }
 .about p { margin: 0; font-size: 0.86rem; line-height: 1.5; color: var(--text-muted); }
 .t3ai-chip[data-confidence="close"] { border-style: dashed; }
-.t3ai-chip[data-confidence="alternative"] { border-style: dotted; opacity: 0.85; }
+.t3ai-chip[data-confidence="alternative"] { border-style: dotted; } /* no fading: the label must keep 4.5:1 */
 .t3ai-chip-note { font-size: 0.85em; color: var(--text-muted); }
 .settings-help { margin: 0 0 0.6rem; font-size: 0.8rem; line-height: 1.45; color: var(--text-muted); }
 .settings-help code { font-size: 0.95em; }
@@ -313,7 +313,13 @@ a:hover { text-decoration-thickness: 2px; }
 @media (forced-colors: active) {
   .t3ai-fit, .t3ai-chip, .token, .chip-option, .t3ai-latest { border: 1px solid CanvasText; }
   .steps li::before { border: 1px solid CanvasText; }
+  /* Backgrounds are dropped in high-contrast mode, so buttons and message bubbles keep a visible edge */
+  .btn { border-color: ButtonText; }
+  .t3ai-you, .t3ai-ai, .t3ai-brief { border: 1px solid CanvasText; }
+  .spinner { border-color: CanvasText; border-top-color: Highlight; }
 }
+/* Long names, links and file names wrap instead of making the page scroll sideways at 320px (WCAG 1.4.10) */
+.t3ai-you, .t3ai-ai, .t3ai-summary, .t3ai-why, .t3ai-card-body h3, .t3ai-by, .t3ai-chip, .filters-summary, .t3ai-warning { overflow-wrap: anywhere; }
 /* iOS Safari zooms the page into any field with text under 16px; keep typing fields at 16px on touch screens */
 @media (pointer: coarse) {
   input, select, textarea, .t3ai-chat-input, .t3ai-file-filter { font-size: 16px; }

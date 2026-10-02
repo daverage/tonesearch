@@ -161,3 +161,20 @@ def test_a_request_with_only_descriptions_matches_nothing(db):
     knowledge.save(db, "heavy distorted tone", NOTES)
     assert knowledge.find(db, "Low guitar tone") is None
     assert knowledge.find(db, "heavy distorted") is None
+
+
+def test_tables_come_back_after_the_database_is_replaced(db):
+    entry_id = knowledge.save(db, "Texas Flood SRV", NOTES)
+    assert knowledge.counts(db) == {"all": 1, "new": 1, "approved": 0, "flagged": 0}
+    knowledge.flag(db, entry_id, "wrong amp")
+    assert knowledge.counts(db)["flagged"] == 1
+    db.unlink()  # tables are set up once per file, so a replaced file must be noticed
+    assert knowledge.find(db, "Texas Flood SRV") is None  # one miss while the tables are made again
+    assert knowledge.save(db, "Texas Flood SRV", NOTES) and knowledge.counts(db)["all"] == 1
+
+
+def test_mcp_research_counts_one_use_of_the_library(monkeypatch, db):
+    monkeypatch.setattr(mcp_server, "library_path", lambda: db)
+    entry_id = knowledge.save(db, "Texas Flood SRV", NOTES)
+    mcp_server.web_research("SRV Texas Flood", notes=lambda text: pytest.fail("the library has it"))
+    assert knowledge.get(db, entry_id)["uses"] == 1

@@ -94,6 +94,13 @@ def _tuning(read, source: str) -> Tuning:
     return Tuning(**values)
 
 
+def _cloudflare_url(account: str, problem: str) -> str:
+    """Workers AI's OpenAI-compatible base URL for an account; AiError(problem) when the ID is malformed."""
+    if not re.fullmatch(r"[A-Fa-f0-9]{32}", account):
+        raise AiError(problem)
+    return f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1"
+
+
 def _visitor_config(provider: str) -> AiConfig:
     """Build config only from the visitor's values: never fall back to the server's secrets."""
     model = overrides.get("model")
@@ -101,13 +108,11 @@ def _visitor_config(provider: str) -> AiConfig:
     if not model:
         raise AiError("Settings: enter the AI model name")
     if provider == "cloudflare":
-        account = overrides.get("account_id")
-        if not re.fullmatch(r"[A-Fa-f0-9]{32}", account):
-            raise AiError("Settings: the Cloudflare account ID must be 32 hexadecimal characters")
+        base_url = _cloudflare_url(overrides.get("account_id"),
+                                   "Settings: the Cloudflare account ID must be 32 hexadecimal characters")
         if not api_key:
             raise AiError("Settings: enter your Cloudflare API token")
-        return AiConfig(provider, f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1", model, api_key, True,
-                        _tuning(lambda n: overrides.get(n.lower()), "Settings"))
+        return AiConfig(provider, base_url, model, api_key, True, _tuning(lambda n: overrides.get(n.lower()), "Settings"))
     if provider == "custom":
         base_url = overrides.get("base_url").rstrip("/")
         parsed = urlparse(base_url)
@@ -131,13 +136,10 @@ def config() -> AiConfig:
         raise AiError(f"No AI model configured (set NAM_MIXER_AI_{provider.upper()}_MODEL)")
     api_key = _scoped(provider, "API_KEY") or None
     if provider == "cloudflare":
-        account = _scoped(provider, "ACCOUNT_ID")
-        if not re.fullmatch(r"[A-Fa-f0-9]{32}", account):
-            raise AiError("Cloudflare account ID must be 32 hexadecimal characters")
+        base_url = _cloudflare_url(_scoped(provider, "ACCOUNT_ID"), "Cloudflare account ID must be 32 hexadecimal characters")
         if not api_key:
             raise AiError("Cloudflare API token is not configured")
-        return AiConfig(provider, f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1", model, api_key,
-                        tuning=_server_tuning(provider))
+        return AiConfig(provider, base_url, model, api_key, tuning=_server_tuning(provider))
     base_url = (_scoped(provider, "BASE_URL") or "http://127.0.0.1:11434/v1").rstrip("/")
     parsed = urlparse(base_url)
     if provider == "local":
@@ -372,7 +374,8 @@ def _normalise(model, value: object) -> object:
         _alias(value, "advice", "tips", "how_to", "steps")
         _alias(value, "gear", "equipment", "rig", "products")
         _alias(value, "search_queries", "queries", "searches", "search_terms")
-        _alias(value, "aliases", "keywords", "names", "also_known_as", "identifiers")
+        _alias(value, "aliases", "names", "also_known_as", "identifiers", "other_names")
+        _alias(value, "keywords", "search_keywords", "phrasings", "wordings", "other_wordings")
         gear = []
         for item in value.get("gear") if isinstance(value.get("gear"), list) else []:
             if isinstance(item, str):
@@ -390,12 +393,13 @@ def _normalise(model, value: object) -> object:
         summary = value.get("summary")
         return {**value, "summary": summary if isinstance(summary, str) else "", "gear": gear[:12],
                 "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6),
-                "aliases": _text_list(value.get("aliases"), 16),
+                "aliases": _text_list(value.get("aliases"), 16), "keywords": _text_list(value.get("keywords"), 16),
                 "requirements": _text_list(value.get("requirements") or value.get("constraints") or value.get("needs"), 12)}
     if model is _Aliases:
-        value = _unwrap(value, {"aliases"})
-        _alias(value, "aliases", "keywords", "names", "also_known_as", "identifiers", "other_names")
-        return {"aliases": _text_list(value.get("aliases"), 16)}
+        value = _unwrap(value, {"aliases", "keywords"})
+        _alias(value, "aliases", "names", "also_known_as", "identifiers", "other_names")
+        _alias(value, "keywords", "search_keywords", "phrasings", "wordings", "other_wordings")
+        return {"aliases": _text_list(value.get("aliases"), 16), "keywords": _text_list(value.get("keywords"), 16)}
     if model is _PackAnswer:
         value = _unwrap(value, {"reply"})
         _alias(value, "reply", "answer", "response", "text", "message")
@@ -421,6 +425,15 @@ _THINKS: set = set()  # endpoint keys whose replies included reasoning
 _THINKING_NAMES = re.compile(r"glm-4\.[5-9]|glm-z1|qwen3|qwq|deepseek-r1|r1-distill|gpt-oss|reason|think|magistral|"
                              r"phi-4-reasoning|\bo[134](-mini)?\b|gpt-5|kimi-k2-thinking", re.IGNORECASE)
 _NO_STREAM: set = set()  # endpoint keys that refused stream=true
+# Visitors choose their own base URL and model, so these records are keyed by values from requests: forget them all
+# now and then rather than let them grow without end. Forgetting only costs a retried request format.
+_MAX_ENDPOINTS = 500
+
+
+def _forget_endpoints_when_full() -> None:
+    if max(len(_FORMAT_TIER), len(_HINT_TIER), len(_THINKS), len(_NO_STREAM)) >= _MAX_ENDPOINTS:
+        for memory in (_FORMAT_TIER, _HINT_TIER, _THINKS, _NO_STREAM):
+            memory.clear()
 
 
 @dataclass(frozen=True)
@@ -512,6 +525,7 @@ def _timeout_message(key: tuple, seconds: float, *, answering: bool = False, thi
 def _chat(cfg: AiConfig, messages: list, *, schema_name: str, schema: dict, max_tokens: int,
           temperature: float, opener=urlopen, deadline: Optional[float] = None) -> _Reply:
     key = (cfg.provider, cfg.base_url, cfg.model)
+    _forget_endpoints_when_full()
     if cfg.visitor and opener is urlopen:
         opener = build_opener(_NoRedirectHandler).open  # a visitor's URL must not redirect us inward
     started = time.monotonic()
@@ -647,6 +661,7 @@ class _Plan(_Model):
     gear: List[_Gear] = Field(default_factory=list, max_length=12)
     search_queries: List[str] = Field(default_factory=list, max_length=6)
     aliases: List[str] = Field(default_factory=list, max_length=16)
+    keywords: List[str] = Field(default_factory=list, max_length=16)
     requirements: List[str] = Field(default_factory=list, max_length=12)
 
 
@@ -708,6 +723,7 @@ _PLAN_SCHEMA = {
             "confidence": {"type": "string", "enum": list(CONFIDENCE)}}, "required": ["kind", "name", "confidence"]}},
         "search_queries": {"type": "array", "items": {"type": "string"}},
         "aliases": {"type": "array", "items": {"type": "string"}},
+        "keywords": {"type": "array", "items": {"type": "string"}},
         "requirements": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["summary", "advice", "gear", "search_queries"],
@@ -808,15 +824,26 @@ _ALIAS_RULE = (
     "bass': 'Nolly', 'Adam Getgood', 'Periphery'). Only names that research or well-known facts support. Never "
     "bandmates, other players, or a label, church or collective the player was part of ('Bethel Music'): they have "
     "their own rigs. Never genres or styles ('djent', 'fusion', 'progressive metal'), sound descriptions or gear.")
+# Every request gets keywords: the other ways a later visitor might type the same request, so their search can reuse
+# this research (and the whole answer, for the same sound) instead of starting again.
+_KEYWORD_RULE = (
+    "for ANY request: 2-5 other ways a player might type this same request, using its own words: spelling, hyphen "
+    "and word-order variants and close rewordings (for 'edge breakup blues': 'edge of break-up blues', 'blues on the "
+    "edge of breakup', 'breakup blues'). Keep exactly its meaning: never add artists, songs, gear or genres it doesn't "
+    "name.")
 
 
-def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: list = (), needs: bool = False) -> list:
-    """The aliases worth filing research under: each must share a word with the request or be named in the evidence
-    (research notes and the plan's own words), and must not be gear or a category. A request for needs keeps none
-    unless one names something in it.
+def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: list = (), needs: bool = False,
+                   keywords: list = ()) -> list:
+    """The names and keywords worth filing research under, stored together as the entry's aliases.
 
-    Aliases file this research under other names for later visitors, so a wrong one spreads. Don't require them to
-    repeat the request: the prompt asks for other names ('Muse', 'Matt Bellamy' for "Knights of Cydonia")."""
+    Names (`aliases`) must share a word with the request or be named in the evidence (research notes and the plan's
+    own words); a request for needs keeps only names that share a word with it. Don't require names to repeat the
+    request: the prompt asks for other names ('Muse', 'Matt Bellamy' for "Knights of Cydonia").
+    Keywords are other wordings of the request, so at least half of each one's words must be the request's own: that
+    keeps out the artists a sound's research mentions ('Jimi Hendrix blues' for "edge breakup blues"), which would
+    hand its research to a search for their rig.
+    Neither may be gear or a category. A wrong alias spreads research to later visitors, so these rules stay strict."""
     asked = set(re.findall(r"[a-z0-9]+", request.lower()))
     items = [(g.get("name", ""), g.get("role", "")) if isinstance(g, dict) else (g.name, g.role) for g in gear]
     known = set(re.findall(r"[a-z0-9]+", " ".join([evidence, *(f"{n} {r}" for n, r in items)]).lower()))
@@ -841,31 +868,42 @@ def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: lis
                 return True  # 'Telecaster'; but the player's name in their own gear ('Eric Clapton') stays
         return False
 
-    if needs and not any(in_request(a) for a in aliases):
-        return []  # for "clean pedal platform amp cab gigging" a model listed "beatles"
-    kept = [a.strip()[:60] for a in aliases if isinstance(a, str) and a.strip()]
-    return list(dict.fromkeys(a for a in kept if not _generic(a) and not names_gear(a) and supported(a)))[:5]
+    def rewords(keyword: str) -> bool:
+        words = {w for w in re.findall(r"[a-z0-9]+", keyword.lower()) if len(w) > 2} - _COMMON_WORDS
+        return bool(words) and 2 * len(words & asked) >= len(words)
+
+    def usable(items: list, keep) -> list:
+        texts = [a.strip()[:60] for a in items if isinstance(a, str) and a.strip()]
+        return [a for a in texts if not _generic(a) and not names_gear(a) and keep(a)][:5]
+
+    # For "clean pedal platform amp cab gigging" a model listed "beatles": a request for needs names nobody.
+    names = usable(aliases, in_request if needs else supported)
+    return list(dict.fromkeys(names + usable(keywords, rewords)))
 
 
 class _Aliases(_Model):
     aliases: List[str] = Field(default_factory=list, max_length=16)
+    keywords: List[str] = Field(default_factory=list, max_length=16)
 
 
-_ALIASES_SCHEMA = {"type": "object", "properties": {"aliases": {"type": "array", "items": {"type": "string"}}},
-                   "required": ["aliases"]}
+_ALIASES_SCHEMA = {"type": "object", "properties": {"aliases": {"type": "array", "items": {"type": "string"}},
+                                                     "keywords": {"type": "array", "items": {"type": "string"}}},
+                   "required": ["aliases", "keywords"]}
 
 
 def suggest_aliases(topic: str, notes: str, gear: list, *, opener=urlopen, deadline: Optional[float] = None) -> list:
-    """Other names for a saved research topic, for entries saved without them (scripts/backfill_aliases.py)."""
+    """Other names and keywords for a saved research topic, for entries saved without them
+    (scripts/backfill_aliases.py)."""
     cfg = config()
     notes = _whole_lines(notes, cfg.tuning.research_chars)
     gear_lines = "\n".join(f"- {g.get('name', '')}: {g.get('role', '')}" for g in gear if isinstance(g, dict))
     user = (f"Player request: {topic.strip()}\n\n"
             + (f"Web research notes (may be partial or noisy):\n{notes}\n\n" if notes else "")
             + (f"Gear found for it:\n{gear_lines}\n\n" if gear_lines else "")
-            + f"Return JSON with aliases: {_ALIAS_RULE} If the request names no artist, band, song or album, return [].")
+            + f"Return JSON with:\n- aliases: {_ALIAS_RULE} If the request names no artist, band, song or album, "
+              f"aliases is [].\n- keywords: {_KEYWORD_RULE}")
     answer = _ask(cfg, user, "aliases", _ALIASES_SCHEMA, _Aliases, opener=opener, deadline=deadline)
-    return filter_aliases(topic, answer.aliases, evidence=notes, gear=gear,
+    return filter_aliases(topic, answer.aliases, evidence=notes, gear=gear, keywords=answer.keywords,
                           needs=len(research._NEEDS.findall(topic)) >= 2)
 
 
@@ -875,6 +913,12 @@ def _whole_lines(text: str, limit: int) -> str:
         return text
     cut = text.rfind("\n", 0, limit + 1)
     return text[:cut] if cut > 0 else text[:limit]
+
+
+# Saved plans and answers are filed under this, so raising it makes every search work its plan out again. Raise it
+# whenever plan_tone's rules change what a plan contains (as when aliases began to be checked against the evidence):
+# otherwise searches reuse plans made by the old rules for up to 30 days (cache.AI_SECONDS).
+PLAN_VERSION = 3  # 3: keywords for every request
 
 
 def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] = None, opener=urlopen,
@@ -925,6 +969,7 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "for budget or modern gear; but a modeller a source says the artist plays (an Axe-Fx, Kemper or Helix rig) is "
         "their real gear.\n"
         f"- aliases: {_ALIAS_RULE}\n"
+        f"- keywords: {_KEYWORD_RULE}\n"
         "- search_queries: 1-3 SHORT TONE3000 catalogue searches for the kind of capture the player wants. Usually that "
         "is the amp (make/model or amp family, e.g. 'Marshall JCM800', 'Fender Deluxe Reverb', 'Vox AC30'), matching "
         "the amps in gear. But TONE3000 also has captures of pedals, preamps, outboard gear, bass rigs and acoustic "
@@ -961,7 +1006,7 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         if not any(_same_gear(amp.name, q) for q in queries + stand_ins):
             queries.append(amp.name.strip()[:80])
     queries = list(dict.fromkeys(queries + stand_ins))
-    aliases = filter_aliases(prompt, plan.aliases, gear=plan.gear, needs=bool(plan.requirements),
+    aliases = filter_aliases(prompt, plan.aliases, gear=plan.gear, needs=bool(plan.requirements), keywords=plan.keywords,
                              evidence=" ".join([research_notes, plan.summary, *plan.advice]))
     return {
         "summary": plan.summary.strip()[:cfg.tuning.max_explanation_chars],

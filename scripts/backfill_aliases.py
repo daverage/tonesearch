@@ -1,4 +1,4 @@
-"""Fill in the other names (aliases) of research library entries that were saved without them.
+"""Fill in the aliases (other names and keywords) of research library entries that were saved without them.
 
     python scripts/backfill_aliases.py               # dry run: what each entry would get, nothing saved
     python scripts/backfill_aliases.py --yes         # save them

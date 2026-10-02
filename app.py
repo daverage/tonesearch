@@ -19,6 +19,7 @@ from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
 from tonesearch import ai, cache, feedback, knowledge, mcp_server, overrides
+from tonesearch import db as database
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
                                  tone3000_search, web_notes)
@@ -85,18 +86,23 @@ def _visitor() -> str:
     return (cloudflare or forwarded or request.remote_addr or "unknown")[:64]
 
 
+def _limits_setup(db) -> None:
+    db.execute("CREATE TABLE IF NOT EXISTS hits (visitor TEXT, bucket TEXT, at REAL)")
+    db.execute("CREATE INDEX IF NOT EXISTS hits_visitor ON hits (visitor, bucket)")
+    db.execute("CREATE INDEX IF NOT EXISTS hits_at ON hits (at)")
+
+
 def _over_limit(bucket: str) -> bool:
     limit = LIMITS[bucket]
     if limit <= 0 or ai.server_is_local():  # local AI means the owner's own machine: nothing to protect
         return False
-    now = time.time()
-    with sqlite3.connect(DATA_DIR / "limits.sqlite3", timeout=5) as db:
-        db.execute("CREATE TABLE IF NOT EXISTS hits (visitor TEXT, bucket TEXT, at REAL)")
+    now, visitor = time.time(), _visitor()
+    with database.connect(DATA_DIR / "limits.sqlite3", _limits_setup) as db:
         db.execute("DELETE FROM hits WHERE at < ?", (now - 3600,))
-        (count,) = db.execute("SELECT COUNT(*) FROM hits WHERE visitor = ? AND bucket = ?", (_visitor(), bucket)).fetchone()
+        (count,) = db.execute("SELECT COUNT(*) FROM hits WHERE visitor = ? AND bucket = ?", (visitor, bucket)).fetchone()
         if count >= limit:
             return True
-        db.execute("INSERT INTO hits VALUES (?, ?, ?)", (_visitor(), bucket, now))
+        db.execute("INSERT INTO hits VALUES (?, ?, ?)", (visitor, bucket, now))
     return False
 
 
@@ -297,11 +303,16 @@ def _entry_links(db, entries: list) -> dict:
         votes = feedback.all_votes(db)
     except sqlite3.Error:
         votes = []
+    by_entry: dict = {}
+    by_words: dict = {}
+    for v in votes:
+        by_entry.setdefault(v["entry_id"], []).append(v)
+        by_words.setdefault(v["words"], []).append(v)
     links = {}
     for entry in entries:
-        topics = {entry["words"]} | answers.get(entry["id"], set()) | {v["words"] for v in votes
-                                                                      if v["entry_id"] == entry["id"]}
-        mine = [v for v in votes if v["entry_id"] == entry["id"] or v["words"] in topics]
+        on_entry = by_entry.get(entry["id"], [])
+        topics = {entry["words"]} | answers.get(entry["id"], set()) | {v["words"] for v in on_entry}
+        mine = {v["id"]: v for v in [*on_entry, *(v for t in topics for v in by_words.get(t, []))]}.values()
         links[entry["id"]] = {"topics": sorted(t for t in topics if t), "answers": len(answers.get(entry["id"], ())),
                               "good": sum(v["vote"] == 1 for v in mine), "bad": sum(v["vote"] == -1 for v in mine)}
     return links
@@ -337,8 +348,7 @@ def admin():
         return render_template("admin.html", view="feedback", q=q, vote=request.args.get("vote", ""),
                                votes=feedback.recent(_library(), vote=vote, text=q),
                                topics=feedback.topic_summary(_library()), message=request.args.get("message", "")[:200])
-    every = knowledge.search(_library(), limit=100_000)
-    counts = {"all": len(every), **{name: sum(e["status"] == name for e in every) for name in knowledge.STATUSES}}
+    counts = knowledge.counts(_library())
     entries = knowledge.search(_library(), q, status)
     return render_template("admin.html", view="library", entries=entries, links=_entry_links(_library(), entries),
                            q=q, status=status, statuses=knowledge.STATUSES, counts=counts,
@@ -370,9 +380,7 @@ def admin_entry(entry_id: int):
         except ValueError as exc:
             message = f"Research #{entry_id} not saved: {exc}"
     # Back to the same filtered list, so reviewing (say) every flagged entry doesn't mean filtering again each time.
-    keep = {"q": form.get("filter_q", "")[:100], "status": form.get("filter_status", "")}
-    keep = {name: value for name, value in keep.items() if value}
-    return redirect(f"{request.script_root}/admin?{urlencode({**keep, 'message': message})}", 303)
+    return _back_to_admin(message, q=form.get("filter_q", "")[:100], status=form.get("filter_status", ""))
 
 
 @app.post("/admin/votes/<int:vote_id>/delete")
@@ -381,7 +389,12 @@ def admin_vote_delete(vote_id: int):
         return denied
     deleted = feedback.delete_vote(_library(), vote_id)
     message = "Deleted the vote." if deleted else "That vote was already deleted."
-    keep = {"view": "feedback", "q": request.form.get("filter_q", "")[:100], "vote": request.form.get("filter_vote", "")}
+    return _back_to_admin(message, view="feedback", q=request.form.get("filter_q", "")[:100],
+                          vote=request.form.get("filter_vote", ""))
+
+
+def _back_to_admin(message: str, **keep: str):
+    """The admin page again, with the same view and filters and a message about what was done."""
     keep = {name: value for name, value in keep.items() if value}
     return redirect(f"{request.script_root}/admin?{urlencode({**keep, 'message': message})}", 303)
 
@@ -416,12 +429,14 @@ def api_search():
     words = " ".join(knowledge.topic_words(topic))
     # Only a first search reads or writes saved answers: a refinement depends on the whole conversation.
     reusable = bool(words) and not history and reuse is None
-    result_key = f"result:{words}:{use_web}:{json.dumps(filters, sort_keys=True)}"
+    # Saved answers for these settings, made by the current plan rules
+    result_suffix = f":{use_web}:{json.dumps(filters, sort_keys=True)}:p{ai.PLAN_VERSION}"
+    result_key = f"result:{words}{result_suffix}"
     if reusable and not fresh:
         saved = cache.get(_library(), result_key, cache.CATALOGUE_SECONDS)  # holds TONE3000 results
         how = "answer_saved"
         if not saved:
-            saved, how = _saved_answer_by_alias(prompt, use_web, filters), "answer_saved_alias"
+            saved, how = _saved_answer_by_alias(prompt, result_suffix), "answer_saved_alias"
         if saved:
             cache.count(_library(), how)
             feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), words))
@@ -448,7 +463,7 @@ def api_search():
                 fresh_research = True
             except RuntimeError as exc:
                 warnings.append(f"Web research unavailable: {exc}")
-    plan_key = f"plan:{words}:{use_web}"
+    plan_key = f"plan:{words}:{use_web}:p{ai.PLAN_VERSION}"
     if plan is None and reusable and not fresh and not fresh_research:
         plan = cache.get(_library(), plan_key, cache.AI_SECONDS)
         if plan:
@@ -523,18 +538,11 @@ def api_search():
     return jsonify({**body, "cached": False})
 
 
-def _saved_answer_by_alias(prompt: str, use_web: bool, filters: dict) -> dict | None:
+def _saved_answer_by_alias(prompt: str, result_suffix: str) -> dict | None:
     """A saved answer for the same rig under another name ("Nolly Getgood bass" for "Periphery bass"), with the
-    same filters and research setting, and no sound the saved one didn't describe."""
-    best, best_score = None, 0.0
-    for words, answer, _created in cache.by_prefix(_library(), "result:", cache.CATALOGUE_SECONDS):
-        if answer.get("use_web") != use_web or answer.get("filters") != filters:
-            continue
-        aliases = ", ".join(knowledge.clean_aliases((answer.get("plan") or {}).get("aliases")))
-        score = knowledge.match_score(prompt, words, aliases, same_sound=True)
-        if score > best_score:  # rows come newest first, so ties keep the newest
-            best, best_score = answer, score
-    return best
+    same filters and research setting (the end of its key), and no sound the saved one didn't describe."""
+    found = knowledge.saved_answer(_library(), prompt, suffix=result_suffix)
+    return found[1] if found else None
 
 
 @app.post("/api/feedback")
@@ -581,13 +589,20 @@ def api_library_flag(entry_id: int):
     return jsonify({"ok": True})
 
 
-@app.get("/api/packs/<int:tone_id>/models")
-def api_models(tone_id: int):
-    architecture = request.args.get("architecture", "2")
+def _file_request_denied(architecture: str):
+    """None when a pack file request may go ahead; otherwise the response to send instead."""
     if architecture not in research.ARCHITECTURES:
         return jsonify({"error": "Invalid NAM version."}), 400
     if not _brings_own("tone3000_api_key") and _over_limit("files"):
         return _limited()
+    return None
+
+
+@app.get("/api/packs/<int:tone_id>/models")
+def api_models(tone_id: int):
+    architecture = request.args.get("architecture", "2")
+    if denied := _file_request_denied(architecture):
+        return denied
     try:
         return jsonify({"models": tone3000_models(tone_id, architecture=architecture, cache_db=_library())})
     except RuntimeError as exc:
@@ -597,10 +612,8 @@ def api_models(tone_id: int):
 @app.get("/api/packs/<int:tone_id>/models/<int:model_id>/download")
 def api_download(tone_id: int, model_id: int):
     architecture = request.args.get("architecture", "2")
-    if architecture not in research.ARCHITECTURES:
-        return jsonify({"error": "Invalid NAM version."}), 400
-    if not _brings_own("tone3000_api_key") and _over_limit("files"):
-        return _limited()
+    if denied := _file_request_denied(architecture):
+        return denied
     try:
         data, name = tone3000_model_download(tone_id, model_id, architecture=architecture)
     except RuntimeError as exc:
@@ -613,11 +626,9 @@ def api_download(tone_id: int, model_id: int):
 
 @app.get("/api/packs/<int:tone_id>/download")
 def api_pack_download(tone_id: int):
-    if not _brings_own("tone3000_api_key") and _over_limit("files"):
-        return _limited()
     architecture = request.args.get("architecture", "any")
-    if architecture not in research.ARCHITECTURES:
-        return jsonify({"error": "Invalid NAM version."}), 400
+    if denied := _file_request_denied(architecture):
+        return denied
     try:
         data, _count = tone3000_pack_zip(tone_id, architecture=architecture)
     except RuntimeError as exc:
