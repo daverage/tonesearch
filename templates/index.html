@@ -32,7 +32,7 @@
    "description": "Describe a guitar or bass tone and find matching Neural Amp Modeler captures on TONE3000, ranked by AI.",
    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "GBP"}}
   </script>
-  <link rel="stylesheet" href="static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="static/v{{ asset_version }}/style.css">
 </head>
 <body data-ad-client="{{ adsense_client }}" data-ad-slot="{{ adsense_slot }}" data-ai-local="{{ ai_local }}">
   <a class="skip-link" href="#tone3000-ai-prompt">Skip to the tone search</a>
@@ -40,6 +40,7 @@
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM capture discovery</div>
+        <a href="cab" class="btn-small-link">Cab embed</a>
         <button type="button" id="btn-about" class="link-btn btn-small-link" aria-haspopup="dialog">How it works</button>
         <button type="button" id="btn-settings" class="btn btn-secondary btn-small" aria-haspopup="dialog">Settings<span id="settings-badge" class="settings-badge" hidden> · your keys</span></button>
       </div>
@@ -303,6 +304,6 @@
     </form>
   </dialog>
   <div id="announcer" class="visually-hidden" aria-live="polite"></div>
-  <script src="static/app.js?v={{ asset_version }}"></script>
+  <script src="static/v{{ asset_version }}/app.js"></script>
 </body>
 </html>

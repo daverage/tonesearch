@@ -6,3 +6,6 @@ data/
 .pytest_cache/
 stderr.log
 *.log
+
+# NAM training input for cab embed, uploaded to the server by hand (see README "Setting up training")
+static/v3_0_0.wav

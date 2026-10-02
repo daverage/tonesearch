@@ -18,7 +18,7 @@ from urllib.parse import quote, urlencode, urlparse
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import ai, cache, feedback, knowledge, mcp_server, overrides
+from tonesearch import ai, cab, cache, feedback, kaggle, knowledge, mcp_server, overrides
 from tonesearch import db as database
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
@@ -30,9 +30,18 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 application = app
-# Changes whenever a static file is redeployed, so Cloudflare's cache never serves stale JS/CSS.
-ASSET_VERSION = str(int(max(f.stat().st_mtime for f in (ROOT / "static").iterdir())))
+# Changes whenever a static file is redeployed. Pages link to static/v<version>/<file> rather than ?v=<version>,
+# because Cloudflare can be set to ignore query strings and would then keep serving the old file.
+ASSET_VERSION = str(int(max(f.stat().st_mtime for f in (ROOT / "static").rglob("*") if f.is_file())))
 app.jinja_env.globals["asset_version"] = ASSET_VERSION
+
+
+@app.get("/static/v<version>/<path:filename>")
+def versioned_static(version: str, filename: str):
+    """A static file under a versioned path. Any version serves the current file; only the URL changes."""
+    response = app.send_static_file(filename)
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 app.jinja_env.globals["confidence_of"] = ai.confidence_of  # older entries say confirmed/artist/suggested
 app.jinja_env.filters["datetime"] = lambda at: time.strftime("%d %b %Y %H:%M", time.gmtime(at)) + " UTC"
 
@@ -58,6 +67,9 @@ LIMITS = {
     "mcp": int(os.environ.get("TONESEARCH_MCP_CALLS_PER_HOUR", "120")),
     "flag": 20,  # "wrong research" reports
     "feedback": 60,  # brief and pack ratings
+    # Cab embed trains on the visitor's own Kaggle account; these only protect this server.
+    "cab_jobs": int(os.environ.get("TONESEARCH_CAB_JOBS_PER_HOUR", "6")),
+    "cab_status": 600,  # job status checks and downloads (the page checks every 30 seconds)
 }
 # MCP web research defaults to the website's search limit, so neither runs out before the other.
 LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", LIMITS["search"]))
@@ -687,6 +699,141 @@ def api_pack_chat():
     except RuntimeError as exc:  # AiError is a RuntimeError too
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
     return jsonify({**answer, "models": models, "ai": ai.source()})
+
+
+# Cab embed: a capture plus a cabinet IR, learned as one NAM model on the visitor's own Kaggle account.
+# Kaggle credentials come in X-Kaggle-Username / X-Kaggle-Key on each request and are never stored.
+
+@app.get("/cab")
+def cab_page():
+    return render_template("cab.html", training_ready=cab.training_ready(), presets=cab.PRESETS)
+
+
+def _kaggle_credentials() -> tuple[str, str]:
+    return kaggle.credentials(request.headers.get("X-Kaggle-Username", ""), request.headers.get("X-Kaggle-Key", ""))
+
+
+def _cab_failure(exc: Exception):
+    status = 400 if isinstance(exc, cab.CabError) else 503  # not 502: Cloudflare replaces 502 bodies
+    return jsonify({"error": str(exc)}), status
+
+
+@app.post("/api/cab/check")
+def api_cab_check():
+    """Confirms the visitor's Kaggle credentials and shows their weekly GPU hours."""
+    if _over_limit("cab_status"):
+        return _limited()
+    try:
+        return jsonify(kaggle.gpu_quota(*_kaggle_credentials()))
+    except kaggle.KaggleError as exc:
+        return _cab_failure(exc)
+
+
+@app.post("/api/cab/jobs")
+def api_cab_start():
+    if not cab.training_ready():
+        return jsonify({"error": "Cab training isn't set up on this site yet (the owner needs to set "
+                                 f"{cab.URL_ENV} or {cab.DATASET_ENV})."}), 503
+    if (request.content_length or 0) > cab.MAX_NAM_BYTES + cab.MAX_IR_BYTES + 100_000:
+        return jsonify({"error": "Those files are too large."}), 413
+    nam_file, ir_file = request.files.get("nam"), request.files.get("ir")
+    try:
+        username, key = _kaggle_credentials()
+        capture = cab.check_nam(nam_file.read() if nam_file else b"")
+        ir_data = ir_file.read() if ir_file else b""
+        cab.check_ir(ir_data)
+        name = cab.model_name(request.form.get("name", ""), capture["name"], ir_file.filename if ir_file else "")
+        script = cab.build_script(capture["nam"], ir_data, ir_name=ir_file.filename, name=name,
+                                  preset=request.form.get("preset", "standard"), input_url=cab.input_url())
+    except (cab.CabError, kaggle.KaggleError) as exc:
+        return _cab_failure(exc)
+    if _over_limit("cab_jobs"):
+        return jsonify({"error": f"You can start {LIMITS['cab_jobs']} cab trainings an hour here. Try again later."}), 429
+    slug = cab.job_slug()
+    try:
+        job = kaggle.push_script(username, key, slug=slug, title=slug, script=script, dataset=cab.input_dataset())
+    except kaggle.KaggleError as exc:
+        return _cab_failure(exc)
+    return jsonify({**job, "name": name, "preset": request.form.get("preset", "standard"),
+                    "warning": "This capture already includes a cabinet, so the IR will be added on top of it."
+                    if capture["has_cab"] else None})
+
+
+def _cab_job_access(owner: str, slug: str) -> tuple[str, str, str]:
+    username, key = _kaggle_credentials()
+    if owner.lower() != username.lower():
+        raise kaggle.KaggleError("That job belongs to a different Kaggle account.")
+    return username, key, f"{owner}/{slug}"
+
+
+def _cab_result(username: str, key: str, ref: str) -> tuple[dict | None, dict]:
+    """(training_result.json summary or None, the output files by name)."""
+    files = kaggle.output(username, key, ref)
+    url = files["files"].get("training_result.json")
+    if not url:
+        return None, files
+    try:
+        result = json.loads(kaggle.fetch_output(url, limit=2_000_000).decode("utf-8"))
+    except (kaggle.KaggleError, ValueError):
+        return None, files
+    return (cab.result_summary(result) if isinstance(result, dict) else None), files
+
+
+@app.get("/api/cab/jobs/<owner>/<slug>")
+def api_cab_status(owner: str, slug: str):
+    if _over_limit("cab_status"):
+        return _limited()
+    try:
+        username, key, ref = _cab_job_access(owner, slug)
+        try:
+            state = kaggle.status(username, key, ref)
+        except kaggle.KaggleError as exc:
+            if exc.code != 404:
+                raise
+            # A job Kaggle hasn't listed yet looks the same as a deleted one; the page tells them apart by age.
+            return jsonify({"state": "missing", "failure": str(exc), "result": None, "progress": None})
+        reply = {"state": state["state"], "failure": state["failure"], "result": None, "progress": None}
+        if state["state"] in kaggle.FINISHED:
+            reply["result"], files = _cab_result(username, key, ref)
+            reply["progress"] = cab.progress(files["log"])
+        else:
+            try:  # the log is often only there once the job ends; progress is a bonus
+                reply["progress"] = cab.progress(kaggle.output(username, key, ref)["log"])
+            except kaggle.KaggleError:
+                pass
+    except kaggle.KaggleError as exc:
+        return _cab_failure(exc)
+    return jsonify(reply)
+
+
+@app.get("/api/cab/jobs/<owner>/<slug>/download")
+def api_cab_download(owner: str, slug: str):
+    if _over_limit("cab_status"):
+        return _limited()
+    try:
+        username, key, ref = _cab_job_access(owner, slug)
+        result, files = _cab_result(username, key, ref)
+        name = (result or {}).get("filename")
+        if not name or name not in files["files"]:
+            name = next((n for n in files["files"] if n.lower().endswith(".nam")), None)
+        if not name:
+            raise kaggle.KaggleError("This job has no trained model to download yet.")
+        data = kaggle.fetch_output(files["files"][name])
+    except kaggle.KaggleError as exc:
+        return _cab_failure(exc)
+    return _attachment(data, secure_filename(name) or "cab-embed.nam", "application/octet-stream")
+
+
+@app.delete("/api/cab/jobs/<owner>/<slug>")
+def api_cab_delete(owner: str, slug: str):
+    if _over_limit("cab_status"):
+        return _limited()
+    try:
+        username, key, ref = _cab_job_access(owner, slug)
+        kaggle.delete(username, key, ref)
+    except kaggle.KaggleError as exc:
+        return _cab_failure(exc)
+    return jsonify({"deleted": ref})
 
 
 if __name__ == "__main__":

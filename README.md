@@ -21,6 +21,8 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
 - [Using the app](#using-the-app)
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Research library](#research-library)
+- [Cab embed](#cab-embed)
+  - [Setting up training](#setting-up-training)
 - [Saved answers and ratings](#saved-answers-and-ratings)
   - [Filling in other names for saved research](#filling-in-other-names-for-saved-research)
   - [Starting fresh](#starting-fresh)
@@ -340,6 +342,39 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 
 ---
 
+## Cab embed
+
+`/cab` (linked as **Cab embed** at the top of the main page) bakes a cabinet IR into an amp capture, so one `.nam` file plays the amp and the cab together in any NAM player that loads A2 captures, with no IR loader.
+
+1. **Choose files.** An amp capture (A1 WaveNet or A2, 48 kHz, without a cab) and a cabinet IR (`.wav`, up to 5 seconds). The page reads them in the browser and says what it found, including when a capture's metadata says it already has a cab, or when the IR is longer than an A2 model can hear.
+2. **Listen.** The page plays a DI recording, or live input from an audio interface, through the capture and the IR, using [neural-amp-modeler-wasm](https://github.com/tone-3000/neural-amp-modeler-wasm) (NeuralAmpModelerCore compiled to WebAssembly by TONE3000, copied into `static/vendor/nam-wasm/`). Nothing is uploaded. The IR is prepared the way training prepares it (mono average, leading silence trimmed at -40 dB, 48 kHz) and scaled to unit energy for listening, since many IRs add 15 to 20 dB. No DI clips are bundled: visitors use their own.
+3. **Train.** The server sends one private script kernel to the **visitor's own** Kaggle account, with a T4 GPU and internet access, through Kaggle's web API. The capture and IR travel inside the script itself, so nothing is uploaded separately. The script (`tonesearch/cab_kernel.py`) follows NAM Mixer's learned cab embed: it renders NAM's official V3 training input through the capture with neural-amp-modeler 0.13 (the Full model of an A2 file; classic A1 files are converted to the layout 0.13 reads), convolves the IR, lowers the level only if the result peaks above -0.2 dBFS, and trains an A2 model on it (Draft 20, Standard 60 or High 120 epochs). The new file keeps the source's name, maker, tone type and input calibration and is marked `amp_cab`.
+4. **Download and compare.** The page lists trainings in the browser and checks on them every 30 seconds while it's open. When one finishes, **Download** saves the `.nam` and loads it under **Listen**, where **Measure the match** renders 20 seconds of the DI recording through the capture + IR and through the trained model and reports the error-to-signal ratio once levels are matched. **Delete from Kaggle** removes the kernel and its output.
+
+What has been checked: the Kaggle script runs end to end locally on a CPU (one training step) with an A2 capture and a 500 ms IR. Its rendering matches NAMCore's native renderer to an error-to-signal ratio below 1e-12 for A2, classic A1 and gated A1 captures. A real training run on Kaggle needs the setup below and a Kaggle account.
+
+Limits:
+
+- **Captures:** WaveNet (A1) and A2 only. LSTM and other architectures, captures that aren't 48 kHz, and files that already have a cabinet stage (`Sequential`) are refused before anything is sent.
+- **Long IRs:** an A2 model hears about 6,332 samples (132 ms at 48 kHz), and the capture uses most of that, so a longer IR's tail is approximated. The result says so.
+- **NAM's data checks stay on.** If the capture plus IR doesn't sound the same each time the test signal repeats (a silent or very noisy capture, or a very long IR), the trainer refuses, and the job reports why.
+- **The browser preview uses NAMCore v0.5.4.** It normalises each model's output to -18 dB from the file's loudness metadata, as many NAM players do, which is why **Measure the match** compares after matching levels. In testing it rendered A2 captures to within an error-to-signal ratio of 6e-4 of the native renderer, but disagreed with it on a synthetic classic A1 file. The training path doesn't use it, but treat the preview of an A1 capture as approximate.
+
+### Setting up training
+
+Training is off until the site owner says where each visitor's Kaggle notebook can get NAM's official V3 training input (`v3_0_0.wav`, from the [NAM trainer](https://github.com/sdatkinson/neural-amp-modeler); NAM Mixer ships it as `assets/training/official_nam_v3_input.wav`). Its MD5 must be `36cd1af62985c2fac3e654333e36431e`, and the notebook checks it before training. Set either or both:
+
+- **`TONESEARCH_NAM_INPUT_URL`** (simplest): an https link to the file on your own hosting, such as `https://marczewski.me.uk/tonesearch/cab/static/v3_0_0.wav`. Each notebook downloads it (26 MB per training, from your hosting). Upload the file there yourself; don't commit it to this repository.
+- **`TONESEARCH_NAM_INPUT_DATASET`**: a public Kaggle dataset holding the file, as `owner/dataset-slug`. Each notebook attaches it, so nothing is downloaded from your hosting, but the dataset shows under your Kaggle username and training depends on it staying public.
+
+With both set, the notebook uses the dataset and falls back to the URL. Restart the app after changing either.
+
+Visitors need a phone-verified Kaggle account (Kaggle requires it for GPUs and internet access) and an API key or `KGAT_` token from **Settings → API** on Kaggle. Training uses their weekly GPU hours; **Check my account** shows how many they've used.
+
+To test the Kaggle script without Kaggle, build a script with `tonesearch.cab.build_script` and run it with neural-amp-modeler 0.13 installed (NAM Mixer's `.venv-a2` works) and `TONESEARCH_ALLOW_CPU=1 TONESEARCH_FAST_DEV_RUN=1 TONESEARCH_INPUT_ROOT=<folder with the input> TONESEARCH_OUTPUT_DIR=<folder>`.
+
+---
+
 ## Saved answers and ratings
 
 TONE Search saves its work so repeat searches are instant and cost nothing. Everything is stored in `data/knowledge.sqlite3` next to the research library. TONE3000 results are kept briefly so new packs appear; the AI's work is kept for much longer, because it only changes when the research does.
@@ -439,6 +474,9 @@ Visitors using their own AI provider can set the same values under **Settings �
 | `TONESEARCH_CHATS_PER_HOUR` | 40 | Pack questions per visitor per hour |
 | `TONESEARCH_FILE_REQUESTS_PER_HOUR` | 120 | File lists and downloads per visitor per hour |
 | `TONESEARCH_LOOKUPS_PER_HOUR` | 600 | Filter autocomplete lookups per visitor per hour |
+| `TONESEARCH_NAM_INPUT_URL` | none | An https link to NAM's official V3 training input, which [Cab embed](#setting-up-training) notebooks download |
+| `TONESEARCH_NAM_INPUT_DATASET` | none | A public Kaggle dataset (`owner/dataset-slug`) holding the same file. Training is off unless this or the URL is set. |
+| `TONESEARCH_CAB_JOBS_PER_HOUR` | 6 | Cab embed trainings a visitor can start per hour (they run on the visitor's Kaggle account) |
 | `TONESEARCH_REQUEST_BUDGET_SECONDS` | 85 | Overall time allowed for one search or pack question |
 | `TONESEARCH_DATA_DIR` | `data/` | Where the rate-limit database is kept |
 | `TONESEARCH_ADSENSE_CLIENT` | none (no ads) | Your Google AdSense publisher ID (`ca-pub-…`). Ads load only when this is set. |
@@ -515,6 +553,7 @@ Ads are off by default. Set `TONESEARCH_ADSENSE_CLIENT` to your own publisher ID
   - A visitor who sets their own AI provider never falls back to the server's secret keys.
 - **Ads share the page with saved keys.** Any script on the page, including the ad script, can read `localStorage` and what is typed into the page. When ads are turned on, visitors who save their own keys are exposed to the ad code, and the Settings dialog tells them so. They are advised to use revocable keys with spending limits. To remove this exposure, turn ads off.
 - **The same site means shared browser storage.** Browsers share `localStorage` across every page on the same domain, not just this app's folder. If other pages on your domain run third-party scripts, host TONE Search on its own subdomain.
+- **Kaggle keys never touch the main page.** Cab embed lives on its own page, `/cab`, which loads no ads or other third-party scripts. A visitor's Kaggle username and key are kept in `sessionStorage` (or `localStorage` if they tick **Remember on this device**), sent as `X-Kaggle-Username` and `X-Kaggle-Key` headers, used for that one request to call Kaggle, and never stored or logged. Jobs can only be read, downloaded or deleted by the Kaggle account that owns them. Kernel output is downloaded only from Kaggle's and Google's storage hosts, following redirects by hand.
 - **Visitors' AI URLs are restricted.** A visitor's custom AI URL must be a public `https://` host, and redirects are refused. Visitors cannot choose `local`. This stops the server from being used to reach private addresses.
 - **Web research page fetches are restricted too.** Pages are only fetched from public hosts, without following redirects.
 - **The rate limiter stores IP addresses briefly.** It keeps each visitor's IP address and request times for up to an hour.
@@ -547,9 +586,15 @@ tonesearch/feedback.py  Votes on briefs and packs
 tonesearch/db.py        SQLite connections shared by the library, saved answers, votes and limits
 tonesearch/mcp_server.py The MCP server (stdio and hosted)
 tonesearch/overrides.py Per-request settings from the visitor's Settings dialog (headers)
+tonesearch/cab.py       Cab embed: checks the capture and IR, builds the Kaggle script
+tonesearch/cab_kernel.py The script that trains on Kaggle (self-contained)
+tonesearch/kaggle.py    Kaggle's web API with the visitor's credentials
 templates/index.html    The single page
 templates/admin.html    The owner's review pages
+templates/cab.html      The cab embed page (no ads)
 static/app.js           Front end (no build step)
+static/cab.js           The cab embed page's script (an ES module)
+static/vendor/nam-wasm/ NeuralAmpModelerCore in WebAssembly (neural-amp-modeler-wasm 2.0.1)
 static/style.css        Styles (light and dark)
 tests/                  Tests; they never touch the network
 scripts/                Eval scripts, their saved research notes, and reset_data.py

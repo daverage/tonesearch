@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <base href="{{ request.script_root }}/">
+  <title>Cab embed: bake a cabinet IR into a NAM capture | TONE Search</title>
+  <meta name="description" content="Hear a NAM amp capture with your cabinet IR in the browser, then train one NAM file with the cab built in, on your own free Kaggle account.">
+  <meta name="theme-color" content="#5b5fee">
+  <link rel="canonical" href="{{ request.base_url }}">
+  <link rel="icon" href="static/favicon.ico" sizes="any">
+  <link rel="icon" href="static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="static/apple-touch-icon.png">
+  <link rel="stylesheet" href="static/v{{ asset_version }}/style.css">
+</head>
+<!-- No ads on this page: it holds Kaggle credentials, and ad scripts can read what a page stores. -->
+<body class="cab-page">
+  <a class="skip-link" href="#cab-files">Skip to the cab embed tool</a>
+  <div class="page">
+    <header class="masthead">
+      <div class="masthead-top">
+        <div class="eyebrow">NAM tools</div>
+        <a href="./" class="btn btn-secondary btn-small">&larr; TONE Search</a>
+      </div>
+      <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> Cab embed</h1>
+      <p class="intro">Bake a cabinet IR into an amp capture, so one NAM file plays the amp and the cab together in any player that loads A2 captures. Listen to the pair in your browser first, then train the new file on your own free <a href="https://www.kaggle.com/" target="_blank" rel="noopener">Kaggle</a> account.</p>
+    </header>
+
+    <main id="main" class="cab-main">
+      <section class="panel cab-section" id="cab-files" aria-labelledby="files-title" tabindex="-1">
+        <div class="cab-step-head">
+          <span class="cab-step" aria-hidden="true">1</span>
+          <div>
+            <h2 id="files-title"><span class="visually-hidden">Step 1: </span>Choose your files</h2>
+            <p class="cab-lead">They stay on your computer until you start a training.</p>
+          </div>
+        </div>
+        <div class="cab-grid">
+          <div class="file-pick" data-state="empty">
+            <input type="file" id="nam-file" class="file-pick-input" accept=".nam,application/json" aria-describedby="nam-hint nam-info">
+            <label for="nam-file" class="file-pick-target">
+              <span class="file-pick-title">Amp capture</span>
+              <span class="file-pick-hint" id="nam-hint">A <code>.nam</code> file, A1 or A2, without a cab</span>
+              <span class="file-pick-row"><span class="btn btn-secondary btn-small" aria-hidden="true">Choose file</span> <span class="file-pick-name" id="nam-name">or drop it here</span></span>
+            </label>
+            <p id="nam-info" class="info file-pick-info" aria-live="polite"></p>
+          </div>
+          <div class="file-pick" data-state="empty">
+            <input type="file" id="ir-file" class="file-pick-input" accept=".wav,audio/wav,audio/x-wav" aria-describedby="ir-hint ir-info">
+            <label for="ir-file" class="file-pick-target">
+              <span class="file-pick-title">Cabinet IR</span>
+              <span class="file-pick-hint" id="ir-hint">A <code>.wav</code> impulse response, up to 5 seconds</span>
+              <span class="file-pick-row"><span class="btn btn-secondary btn-small" aria-hidden="true">Choose file</span> <span class="file-pick-name" id="ir-name">or drop it here</span></span>
+            </label>
+            <p id="ir-info" class="info file-pick-info" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel cab-section" aria-labelledby="listen-title">
+        <div class="cab-step-head">
+          <span class="cab-step" aria-hidden="true">2</span>
+          <div>
+            <h2 id="listen-title"><span class="visually-hidden">Step 2: </span>Listen</h2>
+            <p class="cab-lead">Plays through Neural Amp Modeler's engine in your browser. Nothing is uploaded. Use headphones with live input to avoid feedback.</p>
+          </div>
+        </div>
+        <div class="cab-grid">
+          <fieldset class="cab-choice">
+            <legend>Your guitar signal</legend>
+            <div class="chip-options">
+              <label class="chip-option"><input type="radio" name="source" value="file" checked> A DI recording</label>
+              <label class="chip-option"><input type="radio" name="source" value="live"> Live input</label>
+            </div>
+            <div class="file-pick file-pick-compact" id="di-pick" data-state="empty">
+              <input type="file" id="di-file" class="file-pick-input" accept="audio/*" aria-describedby="di-hint">
+              <label for="di-file" class="file-pick-target">
+                <span class="visually-hidden">DI recording</span>
+                <span class="file-pick-row"><span class="btn btn-secondary btn-small" aria-hidden="true">Choose file</span> <span class="file-pick-name" id="di-name">or drop it here</span></span>
+              </label>
+              <p class="filter-help" id="di-hint">A dry guitar track, recorded without an amp.</p>
+            </div>
+            <p class="filter-help" id="live-hint" hidden>Your browser will ask to use your audio input. Choose your audio interface.</p>
+          </fieldset>
+          <fieldset class="cab-choice">
+            <legend>What you hear</legend>
+            <div class="chip-options">
+              <label class="chip-option"><input type="radio" name="chain" value="pair" checked> Amp + cab IR</label>
+              <label class="chip-option"><input type="radio" name="chain" value="amp"> Amp only</label>
+              <label class="chip-option" id="trained-option" hidden><input type="radio" name="chain" value="trained"> Trained capture</label>
+            </div>
+            <p class="filter-help" id="chain-help">Amp + cab IR is what training will learn. Amp only lets you hear what the IR adds.</p>
+          </fieldset>
+        </div>
+        <div class="cab-transport">
+          <button type="button" id="btn-play" class="btn btn-primary">Play</button>
+          <label class="cab-level" for="out-level">Level</label>
+          <input type="range" id="out-level" min="-36" max="12" step="1" value="-6" aria-valuetext="-6 dB">
+          <output id="out-level-value" for="out-level">-6 dB</output>
+          <span class="spacer"></span>
+          <button type="button" id="btn-compare" class="btn btn-secondary btn-small" disabled aria-describedby="compare-help">Measure the match</button>
+        </div>
+        <p id="listen-status" class="info" aria-live="polite"></p>
+        <p id="compare-help" class="filter-help">Measure the match needs a trained capture. It plays 20 seconds of the DI recording through the amp + IR and through the trained capture, and says how close they are.</p>
+      </section>
+
+      <section class="panel cab-section" aria-labelledby="train-title">
+        <div class="cab-step-head">
+          <span class="cab-step" aria-hidden="true">3</span>
+          <div>
+            <h2 id="train-title"><span class="visually-hidden">Step 3: </span>Train on Kaggle</h2>
+            <p class="cab-lead">Kaggle's GPU learns the amp and the cab as one A2 capture, on your account and your free GPU hours.</p>
+          </div>
+        </div>
+        {% if not training_ready %}
+        <p class="notice">Training isn't set up on this site yet: the owner needs to say where to find NAM's training input (see README.md). You can still listen above.</p>
+        {% endif %}
+        <form id="train-form" class="cab-train" novalidate>
+          <div class="cab-grid">
+            <fieldset class="cab-box">
+              <legend>Your Kaggle account</legend>
+              <label class="field">Username <input name="username" id="kaggle-username" autocomplete="username" spellcheck="false" aria-required="true"></label>
+              <label class="field">API key or token <input name="key" id="kaggle-key" type="password" autocomplete="off" spellcheck="false" aria-required="true" aria-describedby="key-help"></label>
+              <p class="filter-help" id="key-help">Create one on Kaggle under <a href="https://www.kaggle.com/settings" target="_blank" rel="noopener">Settings → API</a>. Your account must be phone-verified to use GPUs.</p>
+              <label class="checkbox-row"><input type="checkbox" id="kaggle-remember"> Remember on this device</label>
+              <div class="cab-row">
+                <button type="button" id="btn-check" class="btn btn-secondary btn-small">Check my account</button>
+                <p id="check-status" class="info" aria-live="polite"></p>
+              </div>
+            </fieldset>
+            <fieldset class="cab-box">
+              <legend>The new capture</legend>
+              <label class="field">Name <input name="name" id="model-name" maxlength="100" placeholder="Capture + cab"></label>
+              <label class="field">Training quality
+                <select name="preset" id="preset" aria-describedby="preset-help">
+                  <option value="draft">Draft: 20 epochs, quickest</option>
+                  <option value="standard" selected>Standard: 60 epochs</option>
+                  <option value="high_def">High: 120 epochs, slowest</option>
+                </select>
+              </label>
+              <p class="filter-help" id="preset-help">Standard takes about three times as long as Draft, and High about six. Waiting for a GPU can add more.</p>
+            </fieldset>
+          </div>
+          <p class="settings-privacy"><strong>Your Kaggle key stays private.</strong> It's saved only in this browser and sent securely with each request to this site's server, which uses it for that one request and forgets it. This page has no ads or third-party scripts. A Kaggle key can manage your whole Kaggle account, so delete it on Kaggle when you no longer need it.</p>
+          <details class="cab-explain">
+            <summary>What happens when you train</summary>
+            <ul>
+              <li>This site sends your capture and IR to Kaggle as one private notebook on <strong>your</strong> account, with a T4 GPU and internet access (to install NAM's trainer). Nothing is kept on this server.</li>
+              <li>The notebook plays NAM's official training signal through your capture and IR, the way NAM Mixer does, then trains an A2 capture on the result with neural-amp-modeler 0.13.</li>
+              <li>The new file keeps the capture's name, maker and calibration, and is marked as an amp + cab capture.</li>
+              <li>An A2 capture hears about 130 ms. The amp uses most of that, so a longer IR's tail is approximated.</li>
+            </ul>
+          </details>
+          <p id="train-status" class="t3ai-warning" role="alert" tabindex="-1" hidden></p>
+          <div class="cab-actions">
+            <button type="submit" id="btn-train" class="btn btn-primary"{% if not training_ready %} disabled{% endif %}>Start training</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel cab-section" aria-labelledby="jobs-title">
+        <div class="cab-step-head">
+          <span class="cab-step cab-step-done" aria-hidden="true">✓</span>
+          <div>
+            <h2 id="jobs-title">Your trainings</h2>
+            <p class="cab-lead">Listed only in this browser. The page checks on them every 30 seconds while it's open, so you can close it and come back.</p>
+          </div>
+        </div>
+        <ul id="jobs" class="cab-jobs"></ul>
+        <p id="jobs-empty" class="cab-empty">No trainings yet.</p>
+        <div class="file-pick file-pick-compact" data-state="empty">
+          <input type="file" id="trained-file" class="file-pick-input" accept=".nam,application/json">
+          <label for="trained-file" class="file-pick-target">
+            <span class="file-pick-row"><span class="btn btn-secondary btn-small" aria-hidden="true">Load a trained file</span> <span class="file-pick-name" id="trained-name">Already have one? Load it to listen and compare.</span></span>
+          </label>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p><strong>Captures belong to their creators.</strong> Only embed a cab into a capture whose licence allows changes, and keep its creator's credit.</p>
+      <details class="footer-legal">
+        <summary>Affiliation and privacy</summary>
+        <p><strong>Not affiliated.</strong> TONE Search is an independent project, not affiliated with or endorsed by Kaggle, TONE3000 or Neural Amp Modeler. The browser engine is TONE3000's <a href="https://github.com/tone-3000/neural-amp-modeler-wasm" target="_blank" rel="noopener">neural-amp-modeler-wasm</a>. The training method follows NAM Mixer's learned cab embed.</p>
+        <p><strong>Privacy.</strong> Your files stay in your browser while you listen. When you train, they go to your own Kaggle account through this site's server, which doesn't keep them. Your Kaggle key and your list of trainings are saved only in this browser.</p>
+      </details>
+      <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. <a href="https://github.com/daverage/tonesearch" target="_blank" rel="noopener">Source code on GitHub</a>, free for non-commercial use under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener">PolyForm Noncommercial License</a>.</p>
+    </footer>
+  </div>
+  <div id="announcer" class="visually-hidden" aria-live="polite"></div>
+  <script type="module" src="static/v{{ asset_version }}/cab.js"></script>
+</body>
+</html>
