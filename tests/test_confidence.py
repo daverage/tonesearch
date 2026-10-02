@@ -163,7 +163,7 @@ def test_requirement_requests_keep_the_models_gear_but_no_stray_aliases():
 
 def test_artist_requests_keep_their_pedals_and_aliases():
     plan = _recommend("Gilmour Comfortably Numb solo", {
-        "summary": "s", "advice": [], "requirements": [], "search_queries": ["Hiwatt DR103"],
+        "summary": "David Gilmour's solo from Pink Floyd's The Wall.", "advice": [], "requirements": [], "search_queries": ["Hiwatt DR103"],
         "aliases": ["David Gilmour", "Pink Floyd", "The Wall"],
         "gear": [{"kind": "amp", "name": "Hiwatt DR103", "confidence": "best"},
                  {"kind": "effect", "name": "Electro-Harmonix Big Muff", "confidence": "best"}]})
@@ -195,15 +195,16 @@ def test_requirement_requests_research_specs_not_rigs(monkeypatch):
 
 def test_aliases_drop_the_plans_own_gear_but_keep_signature_names():
     plan = _recommend("Tom Quayle", {
-        "summary": "s", "advice": [], "search_queries": ["Laney Lionheart"],
+        "summary": "Tom Quayle (TQ) plays legato fusion.", "advice": [], "search_queries": ["Laney Lionheart"],
         "aliases": ["Tom Quayle", "Laney Lionheart 60", "Ibanez TQM2", "TQ"],
         "gear": [{"kind": "amp", "name": "Laney Lionheart 60-watt", "confidence": "best"},
                  {"kind": "guitar", "name": "Ibanez TQM2", "confidence": "best"},
                  {"kind": "effect", "name": "Xotic Tom Quayle Signature Drive"}]})
     assert plan["aliases"] == ["Tom Quayle", "TQ"]
     nolly = _recommend("Periphery bass", {
-        "summary": "s", "advice": [], "search_queries": [],
-        "aliases": ["Nolly", "Periphery", "Adam Getgood", "Juggernaut", "Periphery II", "Select Difficulty"],
+        "summary": "Adam Getgood's bass on Juggernaut, Periphery II and Select Difficulty.", "advice": [],
+        "search_queries": [], "aliases": ["Nolly", "Periphery", "Adam Getgood", "Juggernaut", "Periphery II",
+                                          "Select Difficulty"],
         "gear": [{"kind": "guitar", "name": "Dingwall NG-3 Nolly Signature"}]})
     assert nolly["aliases"] == ["Nolly", "Periphery", "Adam Getgood", "Juggernaut", "Periphery II"]  # at most 5
 
@@ -215,6 +216,49 @@ def test_aliases_drop_gear_categories_and_keep_the_players_name_in_their_own_gea
         "gear": [{"kind": "guitar", "name": "Fender Player Telecaster"}, {"kind": "amp", "name": "Vox AC30 C2"}]})
     assert lake["aliases"] == ["Brandon Lake"]
     clapton = _recommend("Clapton Layla", {
-        "summary": "s", "advice": [], "search_queries": [], "aliases": ["Eric Clapton", "Derek and the Dominos"],
+        "summary": "Eric Clapton's tone with Derek and the Dominos.", "advice": [], "search_queries": [], "aliases": ["Eric Clapton", "Derek and the Dominos"],
         "gear": [{"kind": "guitar", "name": "Fender Eric Clapton Stratocaster"}]})
     assert clapton["aliases"] == ["Eric Clapton", "Derek and the Dominos"]
+
+
+def test_microphones_are_listed_but_never_searched_and_a_classical_guitar_can_be():
+    plan = _recommend("make a direct input classical guitar sound like a condenser microphone", {
+        "summary": "s", "advice": [], "search_queries": ["Austrian Audio OC818", "Takamine DH90", "acoustic simulator"],
+        "gear": [{"kind": "mic", "name": "Austrian Audio OC818", "role": "studio microphone", "confidence": "best"},
+                 {"kind": "guitar", "name": "Takamine DH90", "role": "a nylon guitar to sound like", "confidence": "close"}]})
+    assert [g["kind"] for g in plan["gear"]] == ["mic", "guitar"]
+    assert plan["search_queries"] == ["Takamine DH90", "acoustic simulator"]
+
+
+def test_an_item_its_own_role_calls_an_alternative_is_labelled_one():
+    plan = _recommend("classical guitar condenser microphone", {
+        "summary": "s", "advice": [], "search_queries": [],
+        "gear": [{"kind": "mic", "name": "Gefell m296", "role": "Alternative high-end studio microphone", "confidence": "best"},
+                 {"kind": "mic", "name": "Royer SF2", "role": "a modern equivalent of the original", "confidence": "close"},
+                 {"kind": "mic", "name": "Neumann KM184", "role": "the mic on the original recording", "confidence": "best"}]})
+    assert [g["confidence"] for g in plan["gear"]] == ["alternative", "alternative", "best"]
+
+
+def test_ranking_judges_what_a_pack_captures_not_what_recorded_it():
+    sent = []
+    reply = {"choices": [{"message": {"content": json.dumps({"ranking": [{"id": 1, "fit": 5, "why": "a speaker cab"}]})}}]}
+    ai.rank_packs("DI classical guitar to sound miked", "Austrian Audio OC818 microphone",
+                  [{"id": 1, "title": "Celestion Vintage 30", "gear": "amp-cab", "description": "recorded with an OC818"}],
+                  opener=lambda req, timeout: sent.append(json.loads(req.data)) or _Response(reply))
+    assert "a speaker cabinet recorded with the requested microphone is still a speaker cabinet" in \
+        sent[0]["messages"][-1]["content"]
+
+
+
+def test_other_names_the_evidence_supports_are_kept_without_repeating_the_request():
+    notes = ("- Rig: Matt Bellamy of Muse recorded Knights of Cydonia for Black Holes and Revelations in 2006 through "
+             "a Diezel VH4. (https://rig.example)")
+    body = {"summary": "Bellamy's fuzzy high gain.", "advice": [], "search_queries": ["Diezel VH4"],
+            "aliases": ["Muse", "Matt Bellamy", "Black Holes and Revelations", "2006", "Origin of Symmetry"],
+            "gear": [{"kind": "amp", "name": "Diezel VH4"}]}
+    plan = ai.plan_tone("Knights of Cydonia", research_notes=notes, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    assert plan["aliases"] == ["Muse", "Matt Bellamy", "Black Holes and Revelations", "2006"]  # not the other album
+    nolly = _recommend("Periphery bass", {"summary": "Nolly's Darkglass tone.", "advice": [], "search_queries": [],
+                                          "aliases": ["Nolly", "Adam Getgood"], "gear": []})
+    assert nolly["aliases"] == ["Nolly"]  # the plan names Nolly; nothing names Adam Getgood

@@ -21,7 +21,7 @@ from urllib.request import Request, build_opener, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from tonesearch import overrides
+from tonesearch import overrides, research
 from tonesearch.research import _is_safe_public_host, _NoRedirectHandler
 
 MAX_RESPONSE_BYTES = 1_000_000
@@ -320,7 +320,8 @@ _KIND_SYNONYMS = {
     "amp": "amp", "amps": "amp", "amplifier": "amp", "amp head": "amp", "head": "amp", "combo": "amp",
     "effect": "effect", "effects": "effect", "pedal": "effect", "pedals": "effect", "fx": "effect", "stompbox": "effect",
     "guitar": "guitar", "guitars": "guitar", "bass": "guitar", "pickup": "pickup", "pickups": "pickup",
-    "cab": "cab", "cabinet": "cab", "speaker": "cab", "speakers": "cab", "other": "other",
+    "cab": "cab", "cabinet": "cab", "speaker": "cab", "speakers": "cab",
+    "mic": "mic", "mics": "mic", "microphone": "mic", "microphones": "mic", "other": "other",
 }
 
 
@@ -391,6 +392,10 @@ def _normalise(model, value: object) -> object:
                 "advice": _text_list(value.get("advice"), 8), "search_queries": _text_list(value.get("search_queries"), 6),
                 "aliases": _text_list(value.get("aliases"), 16),
                 "requirements": _text_list(value.get("requirements") or value.get("constraints") or value.get("needs"), 12)}
+    if model is _Aliases:
+        value = _unwrap(value, {"aliases"})
+        _alias(value, "aliases", "keywords", "names", "also_known_as", "identifiers", "other_names")
+        return {"aliases": _text_list(value.get("aliases"), 16)}
     if model is _PackAnswer:
         value = _unwrap(value, {"reply"})
         _alias(value, "reply", "answer", "response", "text", "message")
@@ -660,7 +665,7 @@ class _PackAnswer(_Model):
     recommended_files: List[str] = Field(default_factory=list, max_length=6)
 
 
-_GEAR_KINDS = {"amp", "effect", "guitar", "pickup", "cab", "other"}
+_GEAR_KINDS = {"amp", "effect", "guitar", "pickup", "cab", "mic", "other"}
 # How well this gear answers the request, one scale for every kind of request:
 # best = documented for this recording or era, or meets every stated requirement;
 # close = the artist's gear from another or unknown era, or misses one requirement;
@@ -767,15 +772,17 @@ _KNOWN_PEDALS = re.compile(
     r"\bpedal\b|stomp", re.IGNORECASE)
 # Electric guitars aren't captured on TONE3000, so searches for gear the model calls a guitar are skipped unless the
 # player asks for guitar captures.
-_WANTS_GUITAR = re.compile(r"acoustic|guitar (models?|captures?|sims?)|piezo|\bdi\b", re.IGNORECASE)
+_WANTS_GUITAR = re.compile(r"acoustic|classical|nylon|guitar (models?|captures?|sims?)|piezo|\bdi\b|direct input",
+                           re.IGNORECASE)
 # A category is not a product: "Compressor", "Overdrive pedal" or "fuzz distortion" gives the player nothing to find
 # or search for. A name is generic when every word is one of these; any other word ("Fuzz Factory") makes it a product.
 _GENERIC_WORDS = set(
     "a an the of with and or clean high low gain tube valve solid state vintage modern british american bass guitar "
-    "electric acoustic amp amps amplifier amplifiers head combo cab cabinet speaker speakers compressor overdrive "
+    "electric amp amps amplifier amplifiers head combo cab cabinet speaker speakers compressor overdrive "
     "distortion fuzz boost booster delay reverb chorus flanger phaser tremolo vibrato wah eq equaliser equalizer noise "
     "gate octave pitch shifter looper tuner preamp di box pedal pedals unit device effect effects model modeler "
-    "modeller sim simulator style type channel channels".split())
+    "modeller style type channel channels mic mics microphone microphones condenser dynamic ribbon".split())
+# Not "acoustic simulator": that is a kind of capture TONE3000 has (Boss AC-3, acoustic sims), so a fair search.
 
 
 def _generic(name: str) -> bool:
@@ -784,6 +791,8 @@ def _generic(name: str) -> bool:
 
 
 _FORMAT_WORDS = {"amp", "amplifier", "head", "combo", "the"}
+# An item's role that calls it a stand-in: the label can't then say best or close.
+_STAND_IN = re.compile(r"\b(alternative|substitute|stand-in|modern equivalent|replica|instead of)\b", re.IGNORECASE)
 
 
 def _same_gear(a: str, b: str) -> bool:
@@ -791,6 +800,73 @@ def _same_gear(a: str, b: str) -> bool:
     'Fender Twin Reverb'."""
     words_a, words_b = (set(re.findall(r"[a-z0-9]+", n.lower())) - _FORMAT_WORDS for n in (a, b))
     return bool(words_a and words_b) and (words_a <= words_b or words_b <= words_a)
+
+
+_ALIAS_RULE = (
+    "ONLY if the request names an artist, band, song or album: up to 5 other names someone might type to ask for THIS "
+    "same rig: the player's name and nickname, the band, the song, the album, the era or year (e.g. for 'Periphery "
+    "bass': 'Nolly', 'Adam Getgood', 'Periphery'). Only names that research or well-known facts support. Never "
+    "bandmates, other players, or a label, church or collective the player was part of ('Bethel Music'): they have "
+    "their own rigs. Never genres or styles ('djent', 'fusion', 'progressive metal'), sound descriptions or gear.")
+
+
+def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: list = (), needs: bool = False) -> list:
+    """The aliases worth filing research under: each must share a word with the request or be named in the evidence
+    (research notes and the plan's own words), and must not be gear or a category. A request for needs keeps none
+    unless one names something in it.
+
+    Aliases file this research under other names for later visitors, so a wrong one spreads. Don't require them to
+    repeat the request: the prompt asks for other names ('Muse', 'Matt Bellamy' for "Knights of Cydonia")."""
+    asked = set(re.findall(r"[a-z0-9]+", request.lower()))
+    items = [(g.get("name", ""), g.get("role", "")) if isinstance(g, dict) else (g.name, g.role) for g in gear]
+    known = set(re.findall(r"[a-z0-9]+", " ".join([evidence, *(f"{n} {r}" for n, r in items)]).lower()))
+
+    def in_request(alias: str) -> bool:
+        return bool(set(re.findall(r"[a-z0-9]+", alias.lower())) & asked - _COMMON_WORDS)
+
+    def supported(alias: str) -> bool:
+        words = set(re.findall(r"[a-z0-9]+", alias.lower())) - {"the", "and", "of", "a", "an"}
+        return in_request(alias) or bool(words) and words <= known
+
+    def names_gear(alias: str) -> bool:
+        # 'Ibanez TQM2' or 'Telecaster' would hand this answer to a search for that gear; the player's name in their
+        # own signature product ('Nolly' in 'Dingwall NG-3 Nolly Signature') stays.
+        words = set(re.findall(r"[a-z0-9]+", alias.lower()))
+        for name, role in items:
+            if not name or not words <= set(re.findall(r"[a-z0-9]+", name.lower())):
+                continue
+            if re.search(r"\d", alias) or name.split()[0].lower() in words:
+                return True  # a model ('AC30') or the maker's own name for it ('Ibanez TQM2')
+            if not (in_request(alias) or "signature" in f"{name} {role}".lower()):
+                return True  # 'Telecaster'; but the player's name in their own gear ('Eric Clapton') stays
+        return False
+
+    if needs and not any(in_request(a) for a in aliases):
+        return []  # for "clean pedal platform amp cab gigging" a model listed "beatles"
+    kept = [a.strip()[:60] for a in aliases if isinstance(a, str) and a.strip()]
+    return list(dict.fromkeys(a for a in kept if not _generic(a) and not names_gear(a) and supported(a)))[:5]
+
+
+class _Aliases(_Model):
+    aliases: List[str] = Field(default_factory=list, max_length=16)
+
+
+_ALIASES_SCHEMA = {"type": "object", "properties": {"aliases": {"type": "array", "items": {"type": "string"}}},
+                   "required": ["aliases"]}
+
+
+def suggest_aliases(topic: str, notes: str, gear: list, *, opener=urlopen, deadline: Optional[float] = None) -> list:
+    """Other names for a saved research topic, for entries saved without them (scripts/backfill_aliases.py)."""
+    cfg = config()
+    notes = _whole_lines(notes, cfg.tuning.research_chars)
+    gear_lines = "\n".join(f"- {g.get('name', '')}: {g.get('role', '')}" for g in gear if isinstance(g, dict))
+    user = (f"Player request: {topic.strip()}\n\n"
+            + (f"Web research notes (may be partial or noisy):\n{notes}\n\n" if notes else "")
+            + (f"Gear found for it:\n{gear_lines}\n\n" if gear_lines else "")
+            + f"Return JSON with aliases: {_ALIAS_RULE} If the request names no artist, band, song or album, return [].")
+    answer = _ask(cfg, user, "aliases", _ALIASES_SCHEMA, _Aliases, opener=opener, deadline=deadline)
+    return filter_aliases(topic, answer.aliases, evidence=notes, gear=gear,
+                          needs=len(research._NEEDS.findall(topic)) >= 2)
 
 
 def _whole_lines(text: str, limit: int) -> str:
@@ -836,7 +912,8 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "never generic categories like 'tube amplifier' or 'overdrive pedal'. If the request names an artist, song "
         "or album, list that player's documented gear for it.\n"
         "  Classify kind by what the product IS, not by its brand: a stompbox is an effect even from an amp maker "
-        "(Marshall Shredmaster, Marshall Guv'nor, Marshall Bluesbreaker pedal, Boss DS-1, ProCo RAT, Ibanez Tube Screamer). "
+        "(Marshall Shredmaster, Marshall Guv'nor, Marshall Bluesbreaker pedal, Boss DS-1, ProCo RAT, Ibanez Tube Screamer); "
+        "a microphone is 'mic'. "
         "Only list gear a source says THIS artist used: a forum member describing their own rig, or a site "
         "recommending gear, is not the artist's gear.\n  "
         "Research notes can disagree: trust what the player said in an interview or a documented rig rundown over "
@@ -847,31 +924,33 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "(modelling or practice amps such as a Fender Mustang, Boss Katana or Positive Grid Spark) unless the player asks "
         "for budget or modern gear; but a modeller a source says the artist plays (an Axe-Fx, Kemper or Helix rig) is "
         "their real gear.\n"
-        "- aliases: ONLY if the request names an artist, band, song or album: up to 5 other names someone might type "
-        "to ask for THIS same rig: the player's name and nickname, the band, the song, the album, the era or year (e.g. "
-        "for 'Periphery bass': 'Nolly', 'Adam Getgood', 'Periphery'). Only names that research or well-known facts "
-        "support. Never bandmates, other players, or a label, church or collective the player was part of "
-        "('Bethel Music'): they have their own rigs. Never genres or styles ('djent', 'fusion', "
-        "'progressive metal'), sound descriptions or gear.\n"
+        f"- aliases: {_ALIAS_RULE}\n"
         "- search_queries: 1-3 SHORT TONE3000 catalogue searches for the kind of capture the player wants. Usually that "
         "is the amp (make/model or amp family, e.g. 'Marshall JCM800', 'Fender Deluxe Reverb', 'Vox AC30'), matching "
         "the amps in gear. But TONE3000 also has captures of pedals, preamps, outboard gear, bass rigs and acoustic "
         "guitars/acoustic simulators: when the player asks for one of those (for example 'acoustic guitar models rather "
         "than amps', 'just the pedal', 'bass DI'), search for that instead (e.g. 'Martin D-28', 'acoustic simulator', "
-        "'Boss AC-3', 'Ampeg SVT') and do NOT search for amps they did not ask for. Always include the model, never a "
+        "'Boss AC-3', 'Ampeg SVT') and do NOT search for amps they did not ask for. When the player wants to change how "
+        "a signal sounds (a DI or piezo guitar to sound miked, an electric to sound acoustic), search for captures of the "
+        "result: the instrument it should sound like ('classical guitar', 'nylon', 'Takamine DH90') or 'acoustic "
+        "simulator'. Microphones, interfaces and recording gear are what captures are made WITH, never what they capture: "
+        "never search for them, even when the request names one. Always include the model, never a "
         "bare brand like 'Marshall'. No adjectives, no artist names. Add an effect search only when that pedal is what "
         "creates the core sound."
     )
     plan = _ask(cfg, user, "tone_plan", _PLAN_SCHEMA, _Plan, history=history, opener=opener, deadline=deadline)
     for gear in plan.gear:
         gear.confidence = confidence_of(gear.confidence)
+        if gear.confidence != "alternative" and _STAND_IN.search(gear.role or ""):
+            gear.confidence = "alternative"  # its own role says so: "Alternative high-end studio microphone" | best
         if gear.kind == "amp" and _KNOWN_PEDALS.search(gear.name):
             gear.kind = "effect"
     plan.gear = [g for g in plan.gear if not _generic(g.name)]
     queries = [q.strip()[:80] for q in plan.search_queries if q and not _generic(q)]
-    if not _WANTS_GUITAR.search(prompt):
-        guitars = [g.name for g in plan.gear if g.kind in ("guitar", "pickup")]
-        queries = [q for q in queries if not any(_same_gear(q, name) for name in guitars)]
+    # Recording gear is never what a capture captures; a guitar only is when the player wants guitar captures.
+    uncapturable = ("mic",) if _WANTS_GUITAR.search(prompt) else ("mic", "guitar", "pickup")
+    unsearched = [g.name for g in plan.gear if g.kind in uncapturable]
+    queries = [q for q in queries if not any(_same_gear(q, name) for name in unsearched)]
     # Every query stays eligible, but searches for alternatives go last, so the limit drops those first.
     alternatives = [g.name for g in plan.gear if g.confidence == "alternative"]
     stand_ins = [q for q in queries if any(_same_gear(q, name) for name in alternatives)]
@@ -882,30 +961,14 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         if not any(_same_gear(amp.name, q) for q in queries + stand_ins):
             queries.append(amp.name.strip()[:80])
     queries = list(dict.fromkeys(queries + stand_ins))
-    # Aliases file this research under other names for later visitors, so a wrong one spreads: keep them only
-    # when one names something in the request. For "clean pedal platform amp cab gigging" a model listed "beatles".
-    asked = set(re.findall(r"[a-z0-9]+", prompt.lower()))
-    names_given = any(set(re.findall(r"[a-z0-9]+", a.lower())) & asked - _COMMON_WORDS for a in plan.aliases)
-    # Gear isn't another name for the rig: 'Ibanez TQM2' or 'Telecaster' as an alias would hand this answer to a
-    # search for that gear. A name inside a signature product ('Nolly' in 'Dingwall NG-3 Nolly Signature') is the
-    # player's, so it stays. Nor are categories ('overdrive', 'channel').
-    def names_gear(alias: str) -> bool:
-        words = set(re.findall(r"[a-z0-9]+", alias.lower()))
-        for g in plan.gear:
-            if not words <= set(re.findall(r"[a-z0-9]+", g.name.lower())):
-                continue
-            if re.search(r"\d", alias) or g.name.split()[0].lower() in words:
-                return True  # a model ('AC30') or the maker's own name for it ('Ibanez TQM2')
-            if not (words & asked - _COMMON_WORDS or "signature" in f"{g.name} {g.role}".lower()):
-                return True  # 'Telecaster'; but the player's name in their own gear ('Eric Clapton') stays
-        return False
-    aliases = [a.strip()[:60] for a in plan.aliases if a.strip() and not _generic(a) and not names_gear(a)]
+    aliases = filter_aliases(prompt, plan.aliases, gear=plan.gear, needs=bool(plan.requirements),
+                             evidence=" ".join([research_notes, plan.summary, *plan.advice]))
     return {
         "summary": plan.summary.strip()[:cfg.tuning.max_explanation_chars],
         "advice": [tip.strip() for tip in plan.advice if tip.strip()][:6],
         "gear": [{**g.model_dump(), "kind": g.kind if g.kind in _GEAR_KINDS else "other"} for g in plan.gear][:10],
         "search_queries": queries[:3],
-        "aliases": aliases[:5] if names_given else [],
+        "aliases": aliases,
         "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8],
     }
 
@@ -935,6 +998,9 @@ def rank_packs(prompt: str, summary: str, packs: list, *, opener=urlopen, deadli
         + "\n\nScore EVERY candidate with fit 0-100 using this scale, and give why in one short sentence that names "
         "the deciding detail:\n"
         "Prefer captures of the best-match gear, then close matches; alternatives are only stand-ins.\n"
+        "Judge what each pack CAPTURES (its gear type, title and makes), not every product its description mentions: "
+        "the microphone, interface or guitar used to make a capture is not what was captured, so a speaker cabinet "
+        "recorded with the requested microphone is still a speaker cabinet.\n"
         "- 90-100: the same product (or the exact rig) the request calls for.\n"
         "- 70-89: the same model family, or a very close substitute that will get the player there.\n"
         "- 40-69: a plausible alternative that needs tweaking.\n"

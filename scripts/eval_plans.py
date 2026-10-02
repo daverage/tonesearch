@@ -72,7 +72,44 @@ CASES = {
     "periphery-axe-fx": ("Misha Mansoor Periphery guitar tone", [
         ("keeps the documented Axe-Fx", lambda p, n: _when(n, r"axe-?fx", lambda: bool(_gear(p, r"axe-?fx")))),
     ]),
+    # The research is all "best microphone" lists, but the player wants a DI classical guitar to sound miked.
+    "classical-di-to-mic": ("makes direct input classical guitar more guitar condenser microphone", [
+        ("no search names a microphone", lambda p, n: not any(
+            re.search(_MICS, q, re.I) for q in p["search_queries"])),
+        ("searches for the classical or acoustic sound", lambda p, n: any(
+            re.search(r"classical|nylon|acoustic", q, re.I) for q in p["search_queries"])),
+        ("the 'Alternative' mics aren't best matches", lambda p, n: not any(
+            g["confidence"] == "best" for g in _gear(p, r"m296|sf2"))),
+        ("classical and acoustic captures outrank speaker cabs recorded with the mic", lambda p, n: _outranks(
+            p, {80462, 71126, 55147}, {40962, 43898})),
+    ]),
 }
+_MICS = r"oc818|m296|royer|sf2|se8|se electronics|dpa|4011|cb100|at2020|condenser|microphone"
+# Real TONE3000 packs for ranking checks: what each pack captures, and products its description merely mentions.
+RANK_PACKS = {
+    "classical-di-to-mic": [
+        {"id": 80462, "title": "TAKAMINE DH90 CLASSICAL ACOUSTIC GUITAR", "gear": "experimental",
+         "tags": ["classical acoustic guitar", "violo nylon"], "description": "A capture for nylon-string classical "
+         "guitars whose pickup sounds poor: an LA-2A, an EQ and an impulse response recorded from a DH90 with a "
+         "Neumann KM184."},
+        {"id": 71126, "title": "BOSS ACOUSTIC SIMULATOR AC-3", "gear": "pedal",
+         "tags": ["acoustic guitar model", "acoustic simulator"], "description": "Each mode of the AC-3 at noon."},
+        {"id": 55147, "title": "Ibanez AEG50N (Classical)", "gear": "experimental", "tags": ["nylon", "ir"],
+         "description": "I captured my Ibanez AEG50N classical acoustic guitar with an AKG P120 mic."},
+        {"id": 40962, "title": "Celestion Vintage 30 nam captured", "gear": "amp-cab", "tags": ["cab", "celestion"],
+         "description": "Celestion Vintage 30 speaker in a 1x12 cab, miked with an Austrian Audio OC818."},
+        {"id": 43898, "title": "Greenback nam captured", "gear": "amp-cab", "tags": ["cab", "greenback"],
+         "description": "Celestion Greenback speaker captured with an Austrian Audio OC818 condenser microphone."},
+    ],
+}
+
+
+def _outranks(plan, wanted, unwanted):
+    """Every wanted pack scores above every unwanted one in the plan's ranking."""
+    fits = plan.get("ranking") or {}
+    if not fits:
+        return None
+    return min(fits.get(i, 0) for i in wanted) > max(fits.get(i, 0) for i in unwanted)
 
 
 def _unsupported(plan, notes):
@@ -114,6 +151,9 @@ def main() -> int:
         started = time.monotonic()
         try:
             plan = ai.plan_tone(prompt, research_notes=notes)
+            if name in RANK_PACKS:  # rank a fixed set of real packs against the plan, as the site would
+                ranked = ai.rank_packs(prompt, ai.gear_summary(plan), RANK_PACKS[name])
+                plan["ranking"] = {pack_id: score["fit"] for pack_id, score in ranked.items()}
         except ai.AiError as exc:
             print(f"\n{name}: ERROR {exc}")
             results[name] = {"prompt": prompt, "error": str(exc)}
@@ -127,6 +167,10 @@ def main() -> int:
         for g in plan["gear"]:
             print(f"  {g['kind']:7} {g['name']} | {g['confidence']} | {g.get('role', '')}")
         print(f"  searches: {plan['search_queries']}  aliases: {plan['aliases']}")
+        if plan.get("ranking"):
+            titles = {p["id"]: p["title"] for p in RANK_PACKS[name]}
+            for pack_id, fit in sorted(plan["ranking"].items(), key=lambda item: -item[1]):
+                print(f"  rank {fit:3}  {titles.get(pack_id, pack_id)}")
         for label, ok in outcomes.items():
             print(f"  {'n/a ' if ok is None else 'pass' if ok else 'FAIL'}  {label}")
         for gear_name, missing in results[name]["names_not_in_notes"].items():

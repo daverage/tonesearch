@@ -145,7 +145,7 @@ def download_link(pack_id: int) -> str:
     return f"https://www.tone3000.com/tones/{pack_id}"
 
 
-GEAR_KINDS = ("amp", "effect", "guitar", "pickup", "cab", "other")
+GEAR_KINDS = ("amp", "effect", "guitar", "pickup", "cab", "mic", "other")
 LEVELS = ("best = documented for this recording or era, or meets every requirement; close = the artist's gear from "
           "another era, or misses one requirement; alternative = a substitute, modern equivalent or guess")
 

@@ -24,7 +24,7 @@
   const OLD_LEVELS = { confirmed: "best", artist: "close", suggested: "alternative" };
   const confidence = (g) => OLD_LEVELS[g.confidence] || (g.confidence in CONFIDENCE_LABELS ? g.confidence : "close");
   const confidenceLabel = (plan, g) => CONFIDENCE_LABELS[confidence(g)];
-  const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", other: "Other" };
+  const KIND_LABELS = { amp: "Amps", effect: "Effects", guitar: "Guitars", pickup: "Pickups", cab: "Cabs", mic: "Mics", other: "Other" };
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag);

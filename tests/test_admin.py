@@ -97,3 +97,29 @@ def test_the_library_page_shows_sources_as_links_and_marks_snippets():
     page = client.get("/admin", headers=AUTH).get_data(as_text=True)
     assert '<a href="https://rigs.example/nolly"' in page and "Snippet only" in page
     assert "Delete research, answers and votes" in page
+
+
+def test_suggested_aliases_follow_the_same_rules_as_new_searches(monkeypatch):
+    from tonesearch import ai
+    monkeypatch.setattr(ai, "config", lambda: ai.AiConfig("custom", "https://x/v1", "m", "k"))
+    reply = {"aliases": ["Muse", "Matt Bellamy", "Origin of Symmetry", "Diezel VH4", "fuzz"]}
+
+    class _Reply:
+        def __init__(self):
+            self.payload = json.dumps({"choices": [{"message": {"content": json.dumps(reply)}}]}).encode()
+
+        def read(self, _n=None):
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    notes = "- Rig: Matt Bellamy of Muse tracked Knights of Cydonia through a Diezel VH4. (https://rig.example)"
+    gear = [{"kind": "amp", "name": "Diezel VH4", "role": "main amp", "confidence": "best"}]
+    assert ai.suggest_aliases("Knights of Cydonia", notes, gear, opener=lambda req, timeout: _Reply()) == [
+        "Muse", "Matt Bellamy"]  # not an album the research never mentions, gear or a category
+    reply["aliases"] = ["Beatles"]
+    assert ai.suggest_aliases("stereo combo for gigging, pedal platform", "- The Beatles used AC30 combos. (https://x)",
+                              [], opener=lambda req, timeout: _Reply()) == []
