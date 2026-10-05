@@ -92,6 +92,24 @@ CASES = {
         ("classical and acoustic captures outrank speaker cabs recorded with the mic", lambda p, n: _outranks(
             p, {80462, 71126, 55147}, {40962, 43898})),
     ]),
+    # A live rig rundown lists a wireless and a DI injector before the tone gear: neither shapes the sound.
+    "gene-simmons-monster": ("Gene Simmons on the Monster album by Kiss", [
+        ("no wireless, DI injector or monitoring gear", lambda p, n: not _gear(p, r"shure|u4d|radial|jd-?7|wireless|in-ear")),
+        ("a live rundown is not best-match album gear", lambda p, n: not any(
+            g["confidence"] == "best" for g in _gear(p, r"sansamp|vt-?bass|empress|capistan"))),
+    ]),
+    # The gear page mixes his Smiths guitars and amps with the rack he built for The The years later.
+    "johnny-marr-smiths": ("Johnny Marr jangle on The Smiths records", [
+        ("The The rack gear is not a best match", lambda p, n: not any(
+            g["confidence"] == "best" for g in _gear(p, r"gr-?50|gp-?8|h3000|2290"))),
+    ]),
+    # The AC50 was made for the Beatles in 1965; Cold Turkey is a 1969 single with nothing on its amp.
+    "lennon-cold-turkey": ("John Lennon Cold Turkey", [
+        ("the 1965 Vox AC50 is not a best match", lambda p, n: not any(
+            g["confidence"] == "best" for g in _gear(p, r"ac-?50"))),
+        ("the J-160E acoustic is not a best match", lambda p, n: not any(
+            g["confidence"] == "best" for g in _gear(p, r"j-?160"))),
+    ]),
 }
 _MICS = r"oc818|m296|royer|sf2|se8|se electronics|dpa|4011|cb100|at2020|condenser|microphone"
 # Real TONE3000 packs for ranking checks: what each pack captures, and products its description merely mentions.
