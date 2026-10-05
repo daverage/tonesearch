@@ -238,6 +238,18 @@ _SHOP_HOSTS = ("amazon.", "ebay.", "reverb.com", "gumtree.", "craigslist.", "pre
                "bassbros.co.uk", "pmtonline.co.uk", "dv247.", "zzounds.com", "kijiji.", "marktplaats.", "olx.",
                "etsy.com", "walmart.com")
 _SKIP_HOSTS = _UNREADABLE_HOSTS + _PRESET_HOSTS + _SHOP_HOSTS
+# Generated: tone-settings sites with a page per song built from a catalogue. Their own pages call the rig "an
+# informed estimate", "settings estimated" or a "recommended equivalent... not confirmed", mix the original gear with
+# "modern equivalents", and one (gearstrings) made up serial numbers and lab measurements. They're kept as sources,
+# since they're often the only song-level detail, but gear only they name is never a best match (ai.only_generated).
+# Add a site only when its own pages show this, not because one of its claims was wrong.
+_GENERATED_HOSTS = ("tonemirror.so", "tonesmatch.com", "toneadapt.com", "guitartoneadapt.com", "gettoneadapt.com",
+                    "tonestakr.com", "tonedb.co", "gearstrings.com")
+
+
+def is_generated(href: str) -> bool:
+    host = (urlparse(href).hostname or "").lower()
+    return any(host == site or host.endswith("." + site) for site in _GENERATED_HOSTS)
 # Bass forums, skipped only for requests that don't mention bass: a guitar amp request found a bass-amp thread and
 # the AI suggested a bass head and a bass cab.
 _BASS_SITES = ("talkbass.com", "basschat.co.uk")

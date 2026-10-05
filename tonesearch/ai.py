@@ -889,6 +889,18 @@ def suggested_only(name: str, notes: str) -> bool:
     return not any(named_in(name, clause) or named_in(short, clause) for clause in plain)
 
 
+_NOTE_URL = re.compile(r"\((https?://[^\s)]+)\)\s*$")
+
+
+def only_generated(name: str, notes: str) -> bool:
+    """True when every research line that names the product comes from a generated tone-settings site
+    (research.is_generated): their song-level rigs are estimates, so it can be a close match at most. A line without a
+    link, such as the owner's checked gear, counts as real evidence."""
+    naming = [line for line in notes.splitlines() if line.strip() and named_in(name, line)]
+    return bool(naming) and all((url := _NOTE_URL.search(line)) and research.is_generated(url.group(1))
+                                for line in naming)
+
+
 def _same_gear(a: str, b: str) -> bool:
     """True when one name is the other with words left out: 'Deluxe Reverb' and 'Fender Deluxe Reverb', not
     'Fender Twin Reverb'."""
@@ -1028,8 +1040,9 @@ def _whole_lines(text: str, limit: int) -> str:
 # Saved plans and answers are filed under this, so raising it makes every search work its plan out again. Raise it
 # whenever plan_tone's rules change what a plan contains (as when aliases began to be checked against the evidence):
 # otherwise searches reuse plans made by the old rules for up to 30 days (cache.AI_SECONDS).
-PLAN_VERSION = 5  # 3: keywords for every request; 4: gear the research never names is an alternative;
-# 5: gear it only offers as a stand-in is an alternative, and aliases must be names (no genres, labels or makers)
+PLAN_VERSION = 6  # 3: keywords for every request; 4: gear the research never names is an alternative;
+# 5: gear it only offers as a stand-in is an alternative, and aliases must be names (no genres, labels or makers);
+# 6: gear is dated in its role and non-tone gear left out, and gear only tone-settings sites name is at most close
 
 
 def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] = None, opener=urlopen,
@@ -1120,6 +1133,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
             elif gear.confidence != "alternative" and suggested_only(gear.name, research_notes):
                 gear.confidence = "alternative"
                 gear.role = f"{gear.role.strip()} (the research only suggests it as a stand-in)".strip()
+            elif gear.confidence == "best" and only_generated(gear.name, research_notes):
+                gear.confidence = "close"
+                gear.role = f"{gear.role.strip()} (only tone-settings sites name it)".strip()
     queries = [q.strip()[:80] for q in plan.search_queries if q and not _generic(q)]
     # Recording gear is never what a capture captures; a guitar only is when the player wants guitar captures.
     uncapturable = ("mic",) if _WANTS_GUITAR.search(prompt) else ("mic", "guitar", "pickup")

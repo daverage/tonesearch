@@ -362,3 +362,20 @@ def test_aliases_drop_genres_labels_and_gear_makers_but_keep_names():
     # A genre is written in lower case, a label is a label, 'Mesa' makes the gear, and 'riff' is part of a song:
     # only names are left, and the accent in "Doppelgänger" doesn't stop it supporting the alias.
     assert plan["aliases"] == ["Doppelganger 2005", "Thomas Erak"]
+
+
+def test_gear_only_tone_settings_sites_name_is_at_most_close():
+    notes = ("- Holy Wars settings: Mustaine's Jackson King V into a JCM800 with a TS9 boost. "
+             "(https://www.tonemirror.so/tones/megadeth-holy-wars)\n"
+             "- Holy Wars riff: Bill Lawrence L-500XL bridge pickup into a Marshall JCM800 2203. Settings estimated. "
+             "(https://tonesmatch.com/tones/holy-wars)\n"
+             "- Interview: Mustaine recorded Rust in Peace through a modified Marshall JCM800. (https://mag.example/rip)")
+    body = {"summary": "s", "advice": [], "search_queries": ["Marshall JCM800"],
+            "gear": [{"kind": "amp", "name": "Marshall JCM800", "role": "main amp", "confidence": "best"},
+                     {"kind": "pickup", "name": "Bill Lawrence L-500XL", "role": "bridge", "confidence": "best"}]}
+    plan = ai.plan_tone("Megadeth Holy Wars", research_notes=notes, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    levels = {g["name"]: g["confidence"] for g in plan["gear"]}
+    assert levels == {"Marshall JCM800": "best", "Bill Lawrence L-500XL": "close"}  # the interview names the amp
+    # The owner's checked gear has no link, so it counts as real evidence.
+    assert not ai.only_generated("Bill Lawrence L-500XL", "Gear checked by the site owner: Bill Lawrence L-500XL\n" + notes)

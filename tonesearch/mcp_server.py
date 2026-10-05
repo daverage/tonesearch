@@ -176,6 +176,8 @@ def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
     for g in supported:  # named only as a "modern equivalent" or a buying tip: a stand-in, never the artist's gear
         if ai.suggested_only(g["name"], entry["notes"]):
             g["confidence"] = "alternative"
+        elif g["confidence"] == "best" and ai.only_generated(g["name"], entry["notes"]):
+            g["confidence"] = "close"  # only tone-settings sites' estimates name it
     skipped = [g["name"] for g in items if g not in supported]
     if not supported:
         return ("Nothing saved: none of these appear in the research notes. Only save gear the notes name. "
