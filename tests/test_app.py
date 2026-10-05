@@ -456,7 +456,48 @@ def test_web_research_retries_other_engines(monkeypatch):
         return [{"href": "https://example.com/layla", "title": "Layla", "body": ""}]
     notes = research.web_notes("layla clapton", search=search, evidence=lambda href, topic: "Clapton used a Fender Champ amp.")
     assert "example.com/layla" in notes
-    assert [b for q, b in tried if q == "layla"] == ["auto", "brave,mojeek,yahoo"] * 2 + ["brave,mojeek,yahoo", "auto"]
+    # Two searches, the topic-only last try, then (one note is thin) the extra rig rundown search.
+    assert [b for q, b in tried if q == "layla"] == ["auto", "brave,mojeek,yahoo"] * 2 + ["brave,mojeek,yahoo", "auto"] \
+        + ["auto", "brave,mojeek,yahoo"]
+
+
+def _engine(pages):
+    """A fake search engine: {query word: [urls]}, recording each query it was asked."""
+    asked = []
+
+    def search(query, n, backend, timeout):
+        asked.append(query)
+        for word, urls in pages.items():
+            if word in query:
+                return [{"href": url, "title": url, "body": ""} for url in urls]
+        return []
+    return search, asked
+
+
+def test_thin_research_gets_one_more_search_for_a_rig_rundown(monkeypatch):
+    monkeypatch.setattr(research.time, "sleep", lambda s: None)  # an empty result tries the next engine after a pause
+    search, asked = _engine({"rundown": ["https://pg.example/rundown", "https://first.example/a"],
+                             "interview": ["https://first.example/a", "https://lyrics.example/b"]})
+    evidence = {"https://first.example/a": "Cantrell used a Marshall JCM800 amp.",
+                "https://pg.example/rundown": "Cantrell ran a Bogner Fish preamp into a VHT power amp."}
+    notes = research.web_notes("Alice in Chains Man in the Box", search=search,
+                               evidence=lambda href, topic: evidence.get(href, ""))
+    assert asked[-1] == "Alice in Chains Man in the Box guitarist rig rundown"
+    assert "pg.example/rundown" in notes and notes.count("(https://first.example/a)") == 1  # not read twice
+
+
+def test_no_extra_search_when_research_is_enough_or_asks_for_needs(monkeypatch):
+    monkeypatch.setattr(research.time, "sleep", lambda s: None)
+    pages = {"": ["https://a.example/1", "https://b.example/2"]}
+    search, asked = _engine(pages)
+    evidence = {"https://a.example/1": "Mustaine used a JCM800 amp on Holy Wars.",
+                "https://b.example/2": "Friedman played a Carvin guitar through a Marshall for the solos."}
+    research.web_notes("Megadeth Holy Wars", search=search, evidence=lambda href, topic: evidence[href])
+    assert not any("rundown" in q for q in asked)  # two notes already
+    search, asked = _engine({"": ["https://a.example/1"]})
+    research.web_notes("stereo combo amp for gigging with headroom", search=search,
+                       evidence=lambda href, topic: "The JC-40 is a 40W stereo combo amp.")
+    assert not any("rundown" in q for q in asked)  # a needs request searches specs, not rigs
 
 
 def test_web_research_failure_is_explained(monkeypatch):

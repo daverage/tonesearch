@@ -666,6 +666,9 @@ def _ddgs_search(query: str, max_results: int, *, backend: str = "auto", timeout
 SEARCH_ATTEMPTS = (("auto", 0.0), ("brave,mojeek,yahoo", 1.5))
 TOPIC_ATTEMPTS = (("brave,mojeek,yahoo", 0.0), ("auto", 1.5))
 RESEARCH_SEARCH_SECONDS = 20
+THIN_NOTES = 2  # fewer notes than this from the first searches is thin research
+EXTRA_SEARCH_SECONDS = 6  # the extra search's own limit; its pages have the usual 8 s fetch timeout
+EXTRA_SEARCH_AFTER = 20  # no extra search once research has taken this long: planning needs the time
 
 
 def _search_retrying(search, query: str, deadline: float, attempts=SEARCH_ATTEMPTS) -> tuple[list, Exception | None]:
@@ -691,52 +694,28 @@ def _search_retrying(search, query: str, deadline: float, attempts=SEARCH_ATTEMP
     return [], last_error
 
 
-def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> str:
-    """Return up to MAX_SOURCES notes of documented gear for the request, one "- title: text (url)" line each."""
-    topic = _topic(query)
-    deadline = time.monotonic() + RESEARCH_SEARCH_SECONDS
-    # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
-    # unrelated shops; these two found forums, interviews and gear write-ups instead.
-    bass = bool(_BASS.search(query))
-    player = "bassist bass" if bass else "guitarist"  # a bass request must not find guitar rigs
-    words = _search_words(query)
-    instrument = " bass" if bass else ""  # not " guitar": "...pedal platform gigging guitar" found only pedalboards
-    rig, specs = f"{words} {player} amp pedals gear used", f"{words}{instrument} specifications"
-    needs = len(_NEEDS.findall(query))
-    if needs >= 2:  # "a stereo combo for gigging": what products do, not whose rig
-        queries = (specs, f"{words}{instrument} review")
-    elif needs or any(not _NOT_MODEL.search(m) for m in _MODEL.findall(query)):  # "AC30": a rig or a product
-        # "AC30 specifications" alone found a Panasonic AG-AC30 camcorder; "guitar" is safe here, unlike in the
-        # needs search above.
-        queries = (rig, f"{words}{instrument or ' guitar'} specifications")
-    else:
-        queries = (rig, f"{words} {player} interview amplifier gear")
-    with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
-        outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
-    if not any(found for found, _ in outcomes):
-        outcomes.append(_search_retrying(search, topic, deadline, TOPIC_ATTEMPTS))  # last try: just the topic words
-    results, seen, hosts = [], set(), set()
-    for found, _ in outcomes:
-        for result in found:
-            href = str(result.get("href", "")).strip()
-            host = (urlparse(href).hostname or "").lower().removeprefix("www.")
-            # One page per site: otherwise one tone-settings site can fill every note.
-            bass_site = any(host == site or host.endswith("." + site) for site in _BASS_SITES)
-            if href and href not in seen and host not in hosts and not _skip_source(href) and (bass or not bass_site):
-                seen.add(href)
-                hosts.add(host)
-                results.append(result)
-    if not results:
-        errors = [str(error) for _, error in outcomes if error]
-        raise RuntimeError("the search engines returned nothing"
-                           + (f" ({errors[-1]}); they may be limiting this server for a moment" if errors else " for this request")
-                           + ". The search continued without it.")
+def _usable(found: list, seen: set, hosts: set, bass: bool) -> list:
+    """New results worth reading: one page per site (otherwise one tone-settings site can fill every note), none
+    already tried, no skipped hosts, and bass forums only for bass requests. Updates `seen` and `hosts`."""
+    results = []
+    for result in found:
+        href = str(result.get("href", "")).strip()
+        host = (urlparse(href).hostname or "").lower().removeprefix("www.")
+        bass_site = any(host == site or host.endswith("." + site) for site in _BASS_SITES)
+        if href and href not in seen and host not in hosts and not _skip_source(href) and (bass or not bass_site):
+            seen.add(href)
+            hosts.add(host)
+            results.append(result)
+    return results
 
-    candidates = results[:10]  # several pages have no usable text (blocked or built by JavaScript)
-    with ThreadPoolExecutor(max_workers=len(candidates) or 1) as pool:
+
+def _add_notes(candidates: list, topic: str, evidence, notes: list, taken: list) -> None:
+    """Read the candidate pages in parallel and add a note for each with evidence, up to MAX_SOURCES."""
+    if not candidates or len(notes) >= MAX_SOURCES:
+        return
+    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
         extracts = list(pool.map(lambda r: evidence(str(r.get("href", "")).strip(), topic), candidates))
     topic_words = _topic_words(topic)
-    notes, taken = [], []
     for result, extract in zip(candidates, extracts):
         title = str(result.get("title", "")).strip()
         snippet = re.sub(r"\s+", " ", str(result.get("body", ""))).strip()
@@ -757,7 +736,52 @@ def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> st
             taken.append(words)
             notes.append(f"- {title[:120]}: {text[:EVIDENCE_CHARS]} ({result['href']})")  # URL last and intact
         if len(notes) == MAX_SOURCES:
-            break
+            return
+
+
+def web_notes(query: str, *, search=_ddgs_search, evidence=_page_evidence) -> str:
+    """Return up to MAX_SOURCES notes of documented gear for the request, one "- title: text (url)" line each."""
+    topic = _topic(query)
+    started = time.monotonic()
+    deadline = started + RESEARCH_SEARCH_SECONDS
+    # Tested on real prompts: "guitar rig" matched the Guitar Rig software and "equipboard" pulled in
+    # unrelated shops; these two found forums, interviews and gear write-ups instead.
+    bass = bool(_BASS.search(query))
+    player = "bassist bass" if bass else "guitarist"  # a bass request must not find guitar rigs
+    words = _search_words(query)
+    instrument = " bass" if bass else ""  # not " guitar": "...pedal platform gigging guitar" found only pedalboards
+    rig, specs = f"{words} {player} amp pedals gear used", f"{words}{instrument} specifications"
+    needs = len(_NEEDS.findall(query))
+    if needs >= 2:  # "a stereo combo for gigging": what products do, not whose rig
+        queries = (specs, f"{words}{instrument} review")
+    elif needs or any(not _NOT_MODEL.search(m) for m in _MODEL.findall(query)):  # "AC30": a rig or a product
+        # "AC30 specifications" alone found a Panasonic AG-AC30 camcorder; "guitar" is safe here, unlike in the
+        # needs search above.
+        queries = (rig, f"{words}{instrument or ' guitar'} specifications")
+    else:
+        queries = (rig, f"{words} {player} interview amplifier gear")
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:  # one failing search no longer stops the other
+        outcomes = list(pool.map(lambda q: _search_retrying(search, q, deadline), queries))
+    if not any(found for found, _ in outcomes):
+        outcomes.append(_search_retrying(search, topic, deadline, TOPIC_ATTEMPTS))  # last try: just the topic words
+    seen, hosts = set(), set()
+    results = [result for found, _ in outcomes for result in _usable(found, seen, hosts, bass)]
+    notes, taken = [], []
+    # Several pages have no usable text (blocked or built by JavaScript), so ten are read for four notes.
+    _add_notes(results[:10], topic, evidence, notes, taken)
+    # Search engines vary from call to call: the same search found lyrics and MP3 sites once and rig pages minutes
+    # later. When a rig request comes back thin and there's time, one more search looks for a rig rundown.
+    if len(notes) < THIN_NOTES and needs < 2 and time.monotonic() - started < EXTRA_SEARCH_AFTER:
+        found, error = _search_retrying(search, f"{words} {player} rig rundown", time.monotonic() + EXTRA_SEARCH_SECONDS)
+        outcomes.append((found, error))
+        extra = _usable(found, seen, hosts, bass)
+        results += extra
+        _add_notes(extra[:6], topic, evidence, notes, taken)
+    if not results:
+        errors = [str(error) for _, error in outcomes if error]
+        raise RuntimeError("the search engines returned nothing"
+                           + (f" ({errors[-1]}); they may be limiting this server for a moment" if errors else " for this request")
+                           + ". The search continued without it.")
     if not notes:
         raise RuntimeError("Web research found no pages describing this rig.")
     return "\n".join(notes)
