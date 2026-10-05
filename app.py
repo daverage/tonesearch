@@ -268,6 +268,7 @@ ACTIVITY_EVENTS = (
     ("answer_saved_alias", "…found under another name (aliases)"),
     ("answer_worked_out", "Searches worked out fresh"),
     ("research_library", "Research taken from the library"),
+    ("research_subject", "…found by the AI's cleaned-up subject (typos, other languages, long requests)"),
     ("research_web", "Research searched on the web"),
     ("plan_saved", "Tone plans reused"),
     ("plan_saved_alias", "…the plan saved with the same research, asked another way"),
@@ -282,6 +283,17 @@ ACTIVITY_EVENTS = (
     ("mcp_research_library", "MCP: research taken from the library"),
     ("mcp_research_web", "MCP: research searched on the web"),
 )
+
+
+def _subject(prompt: str, deadline: float) -> tuple[str, bool]:
+    """The AI's short English subject for a first search and whether it names someone, or ('', False) when it can't
+    say or takes too long: the search then goes on with the visitor's own words, as before."""
+    if deadline - time.monotonic() < ai.SUBJECT_SECONDS + RANKING_RESERVE_SECONDS:
+        return "", False
+    try:
+        return ai.subject(prompt, deadline=deadline)
+    except ai.AiError:
+        return "", False
 
 
 UNDOCUMENTED_REASON = "Automatic: the research names none of the gear the AI chose."
@@ -473,8 +485,15 @@ def api_search():
     library = None  # the research library entry this search used or created
     fresh_research = False
     planning_notes = ""  # what the AI plans from: the research, led by the owner's checked gear when there is some
+    subject, named = "", False  # what a first search is about, in short English, so typos and other languages
+    # find saved research; `named` when it names an artist, song or album
     if use_web and plan is None:
         library = knowledge.find(_library(), topic if history else prompt)
+        if not library and not history:
+            subject, named = _subject(prompt, deadline)
+            library = subject and knowledge.find(_library(), subject)
+            if library:
+                cache.count(_library(), "research_subject")
         if library:
             research = library["notes"]
             cache.count(_library(), "research_library")
@@ -483,7 +502,9 @@ def api_search():
         else:
             try:
                 cache.count(_library(), "research_web")
-                research = web_notes(prompt.strip())
+                # A named artist, song or album is searched in clean English; other requests as written, because a
+                # shortened request for needs ("stereo combo for gigging") could lose the words its spec searches use.
+                research = web_notes((subject if named else prompt).strip())
                 fresh_research = True
             except RuntimeError as exc:
                 warnings.append(f"Web research unavailable: {exc}")
@@ -494,7 +515,7 @@ def api_search():
     if plan is None and reusable and not fresh and not fresh_research:
         plan, how = _saved_plan(plan_key)
         if not plan and library and library["words"] != words and knowledge.match_score(
-                prompt, library["words"], library.get("aliases") or "", same_sound=True):
+                subject or prompt, library["words"], library.get("aliases") or "", same_sound=True):
             # The same rig asked another way, describing no sound the saved request didn't: its plan still fits.
             plan, how = _saved_plan(f"plan:{library['words']}:{use_web}:p{ai.PLAN_VERSION}")
             how = how and f"{how}_alias"
@@ -513,7 +534,7 @@ def api_search():
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
-        entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"))
+        entry_id = knowledge.save(_library(), subject or prompt, research, plan.get("gear"), plan.get("aliases"))
         if entry_id and _documents_no_gear(plan, research):
             # Kept for the owner to look at, but flagged, so later searches research it again instead of reusing it.
             knowledge.flag(_library(), entry_id, UNDOCUMENTED_REASON)

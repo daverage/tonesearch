@@ -217,7 +217,9 @@ TOOLS = {
                                    "ranked packs with players' votes); otherwise researches the gear behind a guitar "
                                    "or bass tone (artist, song, era) on the web, returning short cited notes, which "
                                    "can take up to about 30 seconds.", {
-        "description": {"type": "string", "description": "The tone, e.g. 'Gilmour's Comfortably Numb solo'"},
+        "description": {"type": "string", "description": "The tone in English with names spelled right, e.g. "
+                                                         "'David Gilmour - Comfortably Numb solo' (translate it and fix "
+                                                         "typos first: saved research is found by these words)"},
     }, ["description"]),
     "search_packs": (search_packs, "Search TONE3000 for NAM capture packs with one short gear query, e.g. 'Vox AC30'. "
                                    "Call web_research first: it may already have ranked packs for this tone. "

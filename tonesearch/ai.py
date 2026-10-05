@@ -14,7 +14,7 @@ import re
 import socket
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -22,7 +22,7 @@ from urllib.request import Request, build_opener, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from tonesearch import overrides, research
+from tonesearch import knowledge, overrides, research
 from tonesearch.research import _is_safe_public_host, _NoRedirectHandler
 
 MAX_RESPONSE_BYTES = 1_000_000
@@ -1139,6 +1139,78 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
         "aliases": aliases,
         "requirements": [r.strip()[:120] for r in plan.requirements if r.strip()][:8],
     }
+
+
+# ---- Subject: what a request is about, so typos, other languages and long requests find saved research ----------
+
+_SUBJECT_RULE = """Turn a guitar or bass tone request into the short English subject it is about, for looking up research.
+- Names an artist, band, song or album: "Artist - Song or Album", with names spelled correctly.
+- Otherwise: the request itself, shortened to its gear and sound words.
+- Use only what the request names. Never add an album, era, gear or artist it doesn't name, and never add words
+  like "tone", "sound", "similar" or "recreation".
+Examples:
+"quiero el sonido de slash en paradise city" -> "Slash - Paradise City"
+"jimi hendrix" -> "Jimi Hendrix"
+"eric clapon crossroads cream" -> "Eric Clapton - Cream - Crossroads"
+"I need the solo tone from Stairway to heaven by led zep, building it on a Helix with one block" -> "Led Zeppelin - Stairway to Heaven solo"
+"vox ac30 jangly clean with a little hair on it" -> "Vox AC30 jangly clean"
+"""
+_SUBJECT_SCHEMA = {"type": "object", "properties": {"subject": {"type": "string"}}, "required": ["subject"]}
+SUBJECT_SECONDS = 8  # a slow model must never hold a search up: past this, the visitor's own words are used
+
+
+class _Subject(_Model):
+    subject: str = ""
+
+
+def subject_config() -> AiConfig:
+    """The model for subjects: NAM_MIXER_AI_<PROVIDER>_SUBJECT_MODEL when set (a small, fast, non-thinking model is
+    enough), else the main model. A visitor's own provider always uses their model. The reply is a few words."""
+    cfg = config()
+    model = cfg.model if cfg.visitor else (_scoped(cfg.provider, "SUBJECT_MODEL") or cfg.model)
+    return replace(cfg, model=model, tuning=replace(cfg.tuning, max_tokens=120, temperature=0.0))
+
+
+def _close(a: str, b: str) -> bool:
+    """The same word give or take a typo: one edit for short words, two for longer ones ('heatfield', 'hetfield')."""
+    if a == b:
+        return True
+    limit = 1 if min(len(a), len(b)) <= 5 else 2
+    if abs(len(a) - len(b)) > limit:
+        return False
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1] <= limit
+
+
+def subject_words(subject: str, request: str) -> str:
+    """The subject's words that the request itself typed, give or take a typo, in the subject's order; '' when none
+    of them identify anything. Small models invent albums ('Pete Townshend - Live at Leeds' for "Pete Townsend") and
+    artists ('Miles Davis' for "warm jazz fusion"): those words are dropped, and the spelling fixes stay."""
+    asked = re.findall(r"[a-z0-9]+", _plain_letters(request).lower())
+    joined = {a + b for a, b in zip(asked, asked[1:])}  # 'Darkthrone' for "dark throne"
+    kept = [w for w in re.findall(r"[A-Za-z0-9]+", _plain_letters(subject))
+            if w.lower() in joined or any(_close(w.lower(), a) for a in asked)]
+    text = " ".join(kept)  # the subject's own capitals: it becomes the library topic the owner reads
+    return text if knowledge.identity_words(knowledge.topic_words(text)) else ""
+
+
+def subject(prompt: str, *, opener=urlopen, deadline: Optional[float] = None) -> tuple[str, bool]:
+    """What the request is about, in short English with names spelled right ("James Hetfield Master Puppets" for
+    "vorrei ricreare il suono di james heatfield nella canzone master puppet"), or '' when the model adds nothing
+    usable; and whether it names someone (the "Artist - Song" form, or a name alone like "Jimi Hendrix"), which makes
+    it a better web search than the request. Raises AiError like every AI call; callers fall back to the request."""
+    limit = time.monotonic() + SUBJECT_SECONDS
+    answer = _ask(subject_config(), f"{_SUBJECT_RULE}\n\nRequest: {prompt.strip()[:600]}", "subject",
+                  _SUBJECT_SCHEMA, _Subject, opener=opener, deadline=min(limit, deadline or limit))
+    text = subject_words(answer.subject, prompt)
+    words = answer.subject.split()
+    named = " - " in answer.subject or (0 < len(words) <= 4 and all(w[:1].isupper() for w in words))
+    return text, bool(text) and named
 
 
 def gear_summary(plan: dict) -> str:
