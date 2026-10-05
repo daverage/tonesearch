@@ -285,9 +285,20 @@
     return post("api/feedback", { topic: state.topic, ...body });
   }
 
+  // A rating's error, shown once in its box however often it's retried, and announced.
+  function ratingError(box, message) {
+    const warning = box.querySelector(".t3ai-warning") || box.appendChild(el("p", "t3ai-warning"));
+    warning.textContent = message;
+    announce(message);
+  }
+
+  let briefCount = 0;
   function briefRating(data) {
     const box = el("div", "t3ai-rate");
     const ask = el("span", null, "Was this tone brief right?");
+    ask.id = `brief-rate-${++briefCount}`;
+    box.setAttribute("role", "group"); // "Yes" and "No" are read with the question they answer
+    box.setAttribute("aria-labelledby", ask.id);
     const yes = el("button", "btn btn-secondary btn-small", "Yes");
     const no = el("button", "btn btn-secondary btn-small", "No");
     [yes, no].forEach((b) => { b.type = "button"; });
@@ -300,7 +311,7 @@
       if (hadFocus) thanks.focus();
       announce(text);
     };
-    const fail = (error) => { box.append(el("p", "t3ai-warning", error.message)); announce(error.message); };
+    const fail = (error) => ratingError(box, error.message);
     // The brief's own id, and the topic it's saved under, so the vote counts for it whichever wording showed it.
     const brief = { brief_id: data.brief_id || "", brief_words: (data.plan && data.plan.words) || "" };
     yes.addEventListener("click", () => sendFeedback({ target: "brief", vote: 1, library_id: libraryId, ...brief })
@@ -321,18 +332,20 @@
     return box;
   }
 
-  function packRating(pack) {
+  function packRating(pack, titleId) {
     const box = el("div", "t3ai-rate t3ai-rate-pack");
     const choices = [[1, "Good match"], [-1, "Not this"]].map(([vote, text]) => {
       const button = el("button", "link-btn", text);
       button.type = "button";
       button.setAttribute("aria-pressed", "false");
+      button.setAttribute("aria-describedby", titleId); // tells the many identical buttons apart
       button.addEventListener("click", async () => {
         try {
           await sendFeedback({ target: "pack", vote, pack_id: pack.id, pack_title: pack.title });
           choices.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+          box.querySelector(".t3ai-warning")?.remove();
           announce(`Rated ${pack.title}: ${text}.`);
-        } catch (error) { box.append(el("p", "t3ai-warning", error.message)); announce(error.message); }
+        } catch (error) { ratingError(box, error.message); }
       });
       return button;
     });
@@ -463,7 +476,7 @@
       link.setAttribute("aria-describedby", title.id);
       actions.append(link);
     }
-    body.append(actions, packRating(pack));
+    body.append(actions, packRating(pack, title.id));
     const panel = el("div", "t3ai-panel");
     panel.id = `${uid}-panel`;
     panel.hidden = true;

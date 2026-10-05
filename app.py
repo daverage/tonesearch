@@ -377,15 +377,13 @@ def admin_entry(entry_id: int):
     elif not before:
         message = f"Research #{entry_id} no longer exists."
     elif action == "approve_only":  # one click from the list: keep everything, change only the status
-        knowledge.update(_library(), entry_id, topic=before["topic"], notes=before["notes"], gear=before["gear"],
-                         aliases=(before.get("aliases") or "").split(","), status="approved")
+        admin_mcp.approve_as_is(_library(), before)
         message = f"Approved research #{entry_id}."
     else:
-        cache.forget_topic(_library(), before["words"])  # saved plans and results were built on the old research
-        try:
-            knowledge.update(_library(), entry_id, topic=form.get("topic", ""), notes=form.get("notes", ""),
-                             gear=_parse_gear(form.get("gear", "")), aliases=form.get("aliases", "")[:600].split(","),
-                             status="approved" if action == "approve" else form.get("status", "new"))
+        try:  # saved plans and results were built on the old research: cleared once the change is saved
+            admin_mcp.save_entry(_library(), before, topic=form.get("topic", ""), notes=form.get("notes", ""),
+                                 gear=_parse_gear(form.get("gear", "")), aliases=form.get("aliases", "")[:600].split(","),
+                                 status="approved" if action == "approve" else form.get("status", "new"))
             message = f"Saved research #{entry_id}{' and approved it' if action == 'approve' else ''}."
         except ValueError as exc:
             message = f"Research #{entry_id} not saved: {exc}"
@@ -484,6 +482,7 @@ def api_search():
     research = ""
     library = None  # the research library entry this search used or created
     fresh_research = False
+    undocumented = False  # fresh research that names none of the plan's gear: the AI guessed the rig
     planning_notes = ""  # what the AI plans from: the research, led by the owner's checked gear when there is some
     subject, named = "", False  # what a first search is about, in short English, so typos and other languages
     # find saved research; `named` when it names an artist, song or album
@@ -491,7 +490,7 @@ def api_search():
         library = knowledge.find(_library(), topic if history else prompt)
         if not library and not history:
             subject, named = _subject(prompt, deadline)
-            library = subject and knowledge.find(_library(), subject)
+            library = knowledge.find(_library(), subject) if subject else None
             if library:
                 cache.count(_library(), "research_subject")
         if library:
@@ -535,7 +534,7 @@ def api_search():
 
     if fresh_research:
         entry_id = knowledge.save(_library(), subject or prompt, research, plan.get("gear"), plan.get("aliases"))
-        if entry_id and _documents_no_gear(plan, research):
+        if entry_id and undocumented:
             # Kept for the owner to look at, but flagged, so later searches research it again instead of reusing it.
             knowledge.flag(_library(), entry_id, UNDOCUMENTED_REASON)
             warnings.append("The web research didn't document this rig, so the gear below is the AI's suggestion.")

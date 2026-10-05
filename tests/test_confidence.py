@@ -379,3 +379,28 @@ def test_gear_only_tone_settings_sites_name_is_at_most_close():
     assert levels == {"Marshall JCM800": "best", "Bill Lawrence L-500XL": "close"}  # the interview names the amp
     # The owner's checked gear has no link, so it counts as real evidence.
     assert not ai.only_generated("Bill Lawrence L-500XL", "Gear checked by the site owner: Bill Lawrence L-500XL\n" + notes)
+
+
+def test_gear_offered_only_as_a_stand_in_is_suggested_only():
+    tip = "- Buyers' guide: for those on a budget, a Boss SD-1 gets close. (https://guide.example/a)"
+    assert ai.suggested_only("Boss SD-1", tip)
+    # A plain mention anywhere keeps it, and so does a sentence saying someone used it.
+    assert not ai.suggested_only("Boss SD-1", tip + "\n- Interview: his board had a Boss SD-1. (https://mag.example/b)")
+    assert not ai.suggested_only("Boss SD-1", "- Rig: for those asking, he used a Boss SD-1 live. (https://x.example)")
+    assert not ai.suggested_only("Boss SD-1", "- Rig: a Klon Centaur. (https://x.example)")  # not named at all
+
+
+def test_generated_sites_include_their_subdomains_only():
+    assert research.is_generated("https://www.tonedb.co/tones/x")
+    assert research.is_generated("https://tonemirror.so/a")
+    assert not research.is_generated("https://nottonedb.co/a")
+    assert not research.is_generated("not a url")
+
+
+def test_only_fresh_rig_research_that_names_no_gear_counts_as_undocumented():
+    plan = {"gear": [{"name": "Vox AC30"}], "requirements": []}
+    assert app_module._documents_no_gear(plan, "- Notes: a Marshall JCM800. (https://x.example)")
+    assert not app_module._documents_no_gear(plan, "- Notes: a Vox AC30 on the record. (https://x.example)")
+    assert not app_module._documents_no_gear(plan, "")
+    # Needs requests choose gear to meet the needs, not from an artist's research.
+    assert not app_module._documents_no_gear({**plan, "requirements": ["stereo"]}, "- Notes: a JC-120.")

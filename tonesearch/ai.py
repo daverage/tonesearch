@@ -9,7 +9,6 @@ from __future__ import annotations
 import ast
 import json
 import math
-import os
 import re
 import socket
 import time
@@ -23,7 +22,7 @@ from urllib.request import Request, build_opener, urlopen
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from tonesearch import knowledge, overrides, research
-from tonesearch.research import _is_safe_public_host, _NoRedirectHandler
+from tonesearch.research import _env, _is_safe_public_host, _NoRedirectHandler
 
 MAX_RESPONSE_BYTES = 1_000_000
 
@@ -66,10 +65,6 @@ class AiConfig:
     api_key: Optional[str]
     visitor: bool = False  # came from the visitor's Settings, not the server environment
     tuning: Tuning = Tuning()
-
-
-def _env(name: str) -> str:
-    return os.environ.get(name, "").strip()
 
 
 def _scoped(provider: str, name: str) -> str:
@@ -974,7 +969,10 @@ def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: lis
         # own signature product ('Nolly' in 'Dingwall NG-3 Nolly Signature') stays.
         words = set(re.findall(r"[a-z0-9]+", alias.lower()))
         if words & makers:
-            return True  # 'marshall plexi', 'fender tweed deluxe': a maker of this rig's gear the request didn't name
+            # 'marshall plexi', 'fender tweed deluxe': a maker of this rig's gear the request didn't name. A gear name
+            # written without its maker ('Big Muff Pi') makes its first word look like one, so 'Big Black' goes too:
+            # telling them apart needs a list of makers, and a lost alias costs less than a wrong one.
+            return True
         for name, role in items:
             if not name or not words <= set(re.findall(r"[a-z0-9]+", name.lower())):
                 continue

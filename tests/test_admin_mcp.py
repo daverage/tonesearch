@@ -90,6 +90,20 @@ def test_changes_are_only_saved_with_confirm(client, entry_id):
     assert not _saved_answers()  # built on the old research
 
 
+def test_saving_a_change_clears_answers_under_every_name_and_a_refused_one_clears_nothing(client, entry_id):
+    db = app_module._library()
+    # An answer saved for another wording that found this research through an alias
+    cache.put(db, "result:nolly getgood bass:True:{}:p0", {"library": {"id": entry_id}}, "nolly getgood bass")
+    knowledge.save(db, "Metallica Black Album", "- notes (https://x.example/a)", [], [])
+    before = len(_saved_answers())
+    text, error = _call(client, "update_entry", entry_id=entry_id, topic="Metallica Black Album", confirm=True)
+    assert error and "Not saved" in text
+    assert len(_saved_answers()) == before
+
+    text, error = _call(client, "update_entry", entry_id=entry_id, aliases=["Nolly"], confirm=True)
+    assert not error and not _saved_answers()
+
+
 def test_update_refuses_categories_and_emptying_the_sources(client, entry_id):
     text, error = _call(client, "update_entry", entry_id=entry_id,
                         gear=[{"kind": "effect", "name": "Compressor", "role": "x", "confidence": "best"}])

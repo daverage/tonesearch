@@ -9,9 +9,7 @@ off (404) until that token is set. Locally, on the local data folder: `python -m
 """
 from __future__ import annotations
 
-import json
 import sqlite3
-import sys
 import time
 
 from tonesearch import ai, cache, feedback, knowledge, mcp_server
@@ -112,6 +110,22 @@ def delete_entry_and_links(db, entry_id: int) -> str:
             f"plan{'s' if saved != 1 else ''}, and {votes} vote{'s' if votes != 1 else ''}.")
 
 
+def save_entry(db, entry: dict, **changes) -> int:
+    """Save changes to an entry (topic, notes, gear, aliases, status; the rest kept), then clear the saved answers,
+    plans and rankings of every topic built on the old version, found under any name; how many were cleared.
+    Raises ValueError, with nothing cleared, when knowledge.update refuses the change."""
+    topics = entry_links(db, [entry])[entry["id"]]["topics"]
+    knowledge.update(db, entry["id"], **{"topic": entry["topic"], "notes": entry["notes"], "gear": entry["gear"],
+                                         "aliases": _aliases(entry), "status": entry["status"], **changes})
+    return sum(cache.forget_topic(db, words) for words in topics)
+
+
+def approve_as_is(db, entry: dict) -> None:
+    """Approve an entry without changing it: answers built on it still fit, so nothing is cleared."""
+    knowledge.update(db, entry["id"], topic=entry["topic"], notes=entry["notes"], gear=entry["gear"],
+                     aliases=_aliases(entry), status="approved")
+
+
 # ---- Tools ----------------------------------------------------------------------------------------------------
 
 def review_queue(status: str = "waiting", limit: int = 20, query: str = "") -> str:
@@ -186,8 +200,7 @@ def approve_entry(entry_id: int) -> str:
     e = _entry(entry_id)
     if e["status"] == "approved":
         return f"Research #{e['id']} was already approved."
-    knowledge.update(_db(), e["id"], topic=e["topic"], notes=e["notes"], gear=e["gear"], aliases=_aliases(e),
-                     status="approved")
+    approve_as_is(_db(), e)
     return f"Approved research #{e['id']} ({e['topic']})."
 
 
@@ -258,13 +271,11 @@ def update_entry(entry_id: int, topic: str | None = None, aliases: list | None =
         return (f"Proposed changes to research #{e['id']} ({e['topic']}), NOT saved yet:\n{summary}\n\n"
                 "Show these to the owner. Once they agree, call update_entry again with the same arguments and "
                 "confirm=true.")
-    db = _db()
     try:
-        knowledge.update(db, e["id"], topic=new_topic, notes="\n".join(kept), gear=new_gear, aliases=new_aliases,
-                         status=new_status)
+        cleared = save_entry(_db(), e, topic=new_topic, notes="\n".join(kept), gear=new_gear, aliases=new_aliases,
+                             status=new_status)
     except ValueError as exc:
         raise ToolError(f"Not saved: {exc}") from exc
-    cleared = cache.forget_topic(db, e["words"])  # saved briefs and rankings were built on the old research
     return (f"Saved research #{e['id']}:\n{summary}\n"
             f"Cleared {cleared} saved answer{'s' if cleared != 1 else ''}, plan{'s' if cleared != 1 else ''} and "
             "ranking" + ("s" if cleared != 1 else "") + " built on the old version.")
@@ -335,82 +346,25 @@ PROMPT = {"name": "review_library", "description": "Review the research library 
 
 
 def call_tool(name: str, arguments: dict) -> dict:
-    if name not in TOOLS:
-        raise LookupError(name)
-    function, _, properties, required = TOOLS[name]
-    try:
-        if not isinstance(arguments, dict) or set(arguments) - set(properties) or set(required) - set(arguments):
-            raise ToolError(f"{name} takes {', '.join(properties)}; required: {', '.join(required) or 'nothing'}.")
-        try:
-            text = function(**arguments)
-        except TypeError as exc:
-            raise ToolError(f"Invalid arguments for {name}.") from exc
-    except RuntimeError as exc:
-        return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
-    except Exception as exc:  # a bug must not end the local server's loop or hide the reason from the caller
-        print(f"Admin MCP tool {name} failed: {exc!r}", file=sys.stderr)
-        return {"content": [{"type": "text", "text": f"{name} failed unexpectedly ({type(exc).__name__})."}],
-                "isError": True}
-    return {"content": [{"type": "text", "text": text}], "isError": False}
+    return mcp_server.run_tool(TOOLS, name, arguments, lambda function, arguments: function(**arguments),
+                               server="Admin MCP")
+
+
+def _prompt_text(arguments: dict) -> str:
+    limit = str(arguments.get("limit") or "10")[:3]
+    return (f"{INSTRUCTIONS}\n\nReview up to {limit} entries waiting for approval. Give me a short verdict for each, "
+            "approve the ones that are right, and show me the proposed changes for the rest.")
 
 
 def handle(message) -> dict | None:
     """Answer one JSON-RPC message; notifications get None. The caller has already checked the owner's token."""
-    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
-        return mcp_server._error(None, -32600, "Invalid request")
-    if "id" not in message:
-        return None
-    ident, method, params = message["id"], message["method"], message.get("params")
-    params = params if isinstance(params, dict) else {}
-    if method == "initialize":
-        asked = params.get("protocolVersion")
-        return mcp_server._result(ident, {
-            "protocolVersion": asked if asked in mcp_server.PROTOCOL_VERSIONS else mcp_server.PROTOCOL_VERSIONS[0],
-            "capabilities": {"tools": {}, "prompts": {}},
-            "serverInfo": {"name": "TONE Search admin", "version": "1.0"},
-            "instructions": INSTRUCTIONS,
-        })
-    if method == "ping":
-        return mcp_server._result(ident, {})
-    if method == "tools/list":
-        return mcp_server._result(ident, {"tools": [
-            {"name": name, "description": description,
-             "inputSchema": {"type": "object", "properties": properties, "required": required,
-                             "additionalProperties": False}}
-            for name, (_, description, properties, required) in TOOLS.items()
-        ]})
-    if method == "tools/call":
-        try:
-            return mcp_server._result(ident, call_tool(params.get("name"), params.get("arguments") or {}))
-        except LookupError:
-            return mcp_server._error(ident, -32602, f"Unknown tool: {params.get('name')}")
-    if method == "prompts/list":
-        return mcp_server._result(ident, {"prompts": [PROMPT]})
-    if method == "prompts/get":
-        if params.get("name") != PROMPT["name"]:
-            return mcp_server._error(ident, -32602, f"Unknown prompt: {params.get('name')}")
-        limit = str((params.get("arguments") or {}).get("limit") or "10")[:3]
-        return mcp_server._result(ident, {"messages": [{"role": "user", "content": {"type": "text", "text": (
-            f"{INSTRUCTIONS}\n\nReview up to {limit} entries waiting for approval. Give me a short verdict for "
-            "each, approve the ones that are right, and show me the proposed changes for the rest.")}}]})
-    return mcp_server._error(ident, -32601, f"Method not found: {method}")
+    return mcp_server.answer(message, server="TONE Search admin", instructions=INSTRUCTIONS, tools=TOOLS,
+                             prompt=PROMPT, call=call_tool, prompt_text=_prompt_text)
 
 
 def main() -> None:
     """The local stdio server, on the local data folder (TONESEARCH_DATA_DIR)."""
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        try:
-            reply = handle(json.loads(line))
-        except json.JSONDecodeError:
-            reply = mcp_server._error(None, -32700, "Parse error")
-        except Exception as exc:  # keep serving: one bad message must not end the session
-            print(f"Admin MCP message failed: {exc!r}", file=sys.stderr)
-            reply = mcp_server._error(None, -32603, "Internal error")
-        if reply is not None:
-            sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+    mcp_server.serve(handle, "Admin MCP")
 
 
 if __name__ == "__main__":

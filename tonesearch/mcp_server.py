@@ -298,14 +298,33 @@ def _check_key(key: str, *, opener=research.urlopen) -> None:
     _CHECKED_KEYS[digest] = time.time()
 
 
-def call_tool(name: str, arguments: dict, key: str, **injected) -> dict:
-    """Run one tool with the user's own key and return an MCP tool result."""
-    if name not in TOOLS:
+def run_tool(tools: dict, name: str, arguments, run, server: str = "MCP") -> dict:
+    """Check `arguments` against the tool's entry in `tools` and return `run(function, arguments)` as an MCP tool
+    result. Shared with admin_mcp. A RuntimeError is a message for the caller to read and act on; anything else is
+    a bug, logged, and reported without ending the local server's loop."""
+    if name not in tools:
         raise LookupError(name)
-    function, _, properties, required = TOOLS[name]
+    function, _, properties, required = tools[name]
     try:
         if not isinstance(arguments, dict) or set(arguments) - set(properties) or set(required) - set(arguments):
-            raise ToolError(f"{name} takes {', '.join(properties)}; required: {', '.join(required)}.")
+            raise ToolError(f"{name} takes {', '.join(properties)}; required: {', '.join(required) or 'nothing'}.")
+        try:
+            result = run(function, arguments)
+        except TypeError as exc:
+            raise ToolError(f"Invalid arguments for {name}.") from exc
+    except RuntimeError as exc:
+        return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
+    except Exception as exc:  # a bug must not end the local server's loop or hide the reason from the caller
+        print(f"{server} tool {name} failed: {exc!r}", file=sys.stderr)
+        return {"content": [{"type": "text", "text": f"{name} failed unexpectedly ({type(exc).__name__})."}],
+                "isError": True}
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    return {"content": [{"type": "text", "text": text}], "isError": False}
+
+
+def call_tool(name: str, arguments: dict, key: str, **injected) -> dict:
+    """Run one tool with the user's own key and return an MCP tool result."""
+    def run(function, arguments):
         if not key.startswith("t3k_cs_"):
             raise ToolError(NO_KEY)
         overrides.activate({"tone3000_api_key": key})  # never falls back to a server's own key
@@ -313,25 +332,16 @@ def call_tool(name: str, arguments: dict, key: str, **injected) -> dict:
             # Saved answers and web research never reach TONE3000 with the caller's key, so check every key here:
             # otherwise any made-up t3k_cs_ key would get cached catalogue data and free web searches.
             _check_key(key)
-            if name == "rate_result":
-                injected = {**injected, "voter_id": feedback.voter("mcp:" + key)}
-            result = function(**arguments, **injected)
-        except TypeError as exc:
-            raise ToolError(f"Invalid arguments for {name}.") from exc
+            extra = {**injected, "voter_id": feedback.voter("mcp:" + key)} if name == "rate_result" else injected
+            return function(**arguments, **extra)
         finally:
             overrides.activate({})
-    except RuntimeError as exc:
-        return {"content": [{"type": "text", "text": str(exc)}], "isError": True}
-    except Exception as exc:  # a bug must not end the local server's loop or hide the reason from the caller
-        print(f"MCP tool {name} failed: {exc!r}", file=sys.stderr)
-        return {"content": [{"type": "text", "text": f"{name} failed unexpectedly ({type(exc).__name__})."}],
-                "isError": True}
-    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-    return {"content": [{"type": "text", "text": text}], "isError": False}
+    return run_tool(TOOLS, name, arguments, run)
 
 
-def handle(message, key: str) -> dict | None:
-    """Answer one JSON-RPC message; notifications get None."""
+def answer(message, *, server: str, instructions: str, tools: dict, prompt: dict, call, prompt_text) -> dict | None:
+    """Answer one JSON-RPC message for an MCP server; notifications get None. Shared with admin_mcp: `call(name,
+    arguments)` runs a tool and `prompt_text(arguments)` writes the user message for the server's one prompt."""
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
         return _error(None, -32600, "Invalid request")
     if "id" not in message:
@@ -343,8 +353,8 @@ def handle(message, key: str) -> dict | None:
         return _result(ident, {
             "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
             "capabilities": {"tools": {}, "prompts": {}},
-            "serverInfo": {"name": "TONE Search", "version": "1.0"},
-            "instructions": INSTRUCTIONS,
+            "serverInfo": {"name": server, "version": "1.0"},
+            "instructions": instructions,
         })
     if method == "ping":
         return _result(ident, {})
@@ -353,22 +363,29 @@ def handle(message, key: str) -> dict | None:
             {"name": name, "description": description,
              "inputSchema": {"type": "object", "properties": properties, "required": required,
                              "additionalProperties": False}}
-            for name, (_, description, properties, required) in TOOLS.items()
+            for name, (_, description, properties, required) in tools.items()
         ]})
     if method == "tools/call":
         try:
-            return _result(ident, call_tool(params.get("name"), params.get("arguments") or {}, key))
+            return _result(ident, call(params.get("name"), params.get("arguments") or {}))
         except LookupError:
             return _error(ident, -32602, f"Unknown tool: {params.get('name')}")
     if method == "prompts/list":
-        return _result(ident, {"prompts": [PROMPT]})
+        return _result(ident, {"prompts": [prompt]})
     if method == "prompts/get":
-        if params.get("name") != PROMPT["name"]:
+        if params.get("name") != prompt["name"]:
             return _error(ident, -32602, f"Unknown prompt: {params.get('name')}")
-        description = str((params.get("arguments") or {}).get("description", ""))[:500]
-        return _result(ident, {"messages": [{"role": "user", "content": {
-            "type": "text", "text": f"{INSTRUCTIONS}\n\nThe tone I want: {description}"}}]})
+        text = prompt_text(params.get("arguments") or {})
+        return _result(ident, {"messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
     return _error(ident, -32601, f"Method not found: {method}")
+
+
+def handle(message, key: str) -> dict | None:
+    """Answer one JSON-RPC message; notifications get None."""
+    return answer(message, server="TONE Search", instructions=INSTRUCTIONS, tools=TOOLS, prompt=PROMPT,
+                  call=lambda name, arguments: call_tool(name, arguments, key),
+                  prompt_text=lambda arguments: (f"{INSTRUCTIONS}\n\nThe tone I want: "
+                                                 f"{str(arguments.get('description', ''))[:500]}"))
 
 
 def _result(ident, result):
@@ -379,24 +396,29 @@ def _error(ident, code, message):
     return {"jsonrpc": "2.0", "id": ident, "error": {"code": code, "message": message}}
 
 
-def main() -> None:
-    """The local stdio server: newline-delimited JSON-RPC, no rate limits."""
-    key = os.environ.get("TONE3000_API_KEY", "").strip()
-    if not key.startswith("t3k_cs_"):
-        sys.exit(NO_KEY)
+def serve(handle, server: str = "MCP") -> None:
+    """A local stdio server: newline-delimited JSON-RPC, each message answered by `handle(message)`."""
     for line in sys.stdin:
         if not line.strip():
             continue
         try:
-            reply = handle(json.loads(line), key)
+            reply = handle(json.loads(line))
         except json.JSONDecodeError:
             reply = _error(None, -32700, "Parse error")
         except Exception as exc:  # keep serving: one bad message must not end the session
-            print(f"MCP message failed: {exc!r}", file=sys.stderr)
+            print(f"{server} message failed: {exc!r}", file=sys.stderr)
             reply = _error(None, -32603, "Internal error")
         if reply is not None:
             sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
             sys.stdout.flush()
+
+
+def main() -> None:
+    """The local stdio server, with no rate limits."""
+    key = os.environ.get("TONE3000_API_KEY", "").strip()
+    if not key.startswith("t3k_cs_"):
+        sys.exit(NO_KEY)
+    serve(lambda message: handle(message, key))
 
 
 if __name__ == "__main__":

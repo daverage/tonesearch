@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import Request, build_opener, urlopen
 
-from .research import _NoRedirectHandler
+from .research import _NoRedirectHandler, _on_site
 
 API_BASE = "https://api.kaggle.com/v1"
 KERNELS = "kernels.KernelsApiService"
@@ -169,7 +169,7 @@ def gpu_quota(username: str, key: str, *, opener=urlopen) -> dict:
 def _output_host_ok(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and any(host == h or host.endswith("." + h) for h in _OUTPUT_HOSTS)
+    return parsed.scheme == "https" and _on_site(host, _OUTPUT_HOSTS)
 
 
 def fetch_output(url: str, *, opener=None, limit: int = MAX_OUTPUT_BYTES) -> bytes:

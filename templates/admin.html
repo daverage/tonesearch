@@ -190,6 +190,7 @@
     </form>
   </div>
 
+  <h2 class="visually-hidden">Research entries</h2>
   {% for entry in entries %}
   {% set link = links[entry.id] %}
   {% set sources = entry.notes|sources %}
@@ -216,7 +217,9 @@
 
         <h3>Gear</h3>
         {% if entry.gear %}
-        <table class="gear"><tbody>
+        <table class="gear">
+          <thead class="visually-hidden"><tr><th scope="col">Kind</th><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Level</th></tr></thead>
+          <tbody>
           {% for g in entry.gear %}{% set level = confidence_of(g.confidence) %}
           <tr><td class="kind">{{ g.kind }}</td><td class="name">{{ g.name }}</td><td>{{ g.role }}</td>
             <td class="level"><span class="badge badge-{{ level }}">{{ level }}</span></td></tr>
@@ -230,7 +233,7 @@
           {% for s in sources %}
           <li>{% if s.url %}<a href="{{ s.url }}" rel="noopener noreferrer nofollow" target="_blank">{{ s.title or s.url }}</a>
               <span class="host">{{ s.url.split('/')[2] if s.url.count('/') >= 2 else '' }}</span>{% else %}<strong>{{ s.title or "Note" }}</strong>{% endif %}
-              {% if s.snippet %}<span class="badge badge-snippet" title="The page couldn't be read: this is the search engine's snippet">Snippet only</span>{% endif %}
+              {% if s.snippet %}<span class="badge badge-snippet" title="The page couldn't be read: this is the search engine's snippet">Snippet only<span class="visually-hidden">: the page couldn't be read, so this is the search engine's snippet</span></span>{% endif %}
             <p>{{ s.text }}</p></li>
           {% endfor %}
         </ul>

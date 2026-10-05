@@ -247,11 +247,6 @@ _SKIP_HOSTS = _UNREADABLE_HOSTS + _PRESET_HOSTS + _SHOP_HOSTS
 # Add a site only when its own pages show this, not because one of its claims was wrong.
 _GENERATED_HOSTS = ("tonemirror.so", "tonesmatch.com", "toneadapt.com", "guitartoneadapt.com", "gettoneadapt.com",
                     "tonestakr.com", "tonedb.co", "gearstrings.com")
-
-
-def is_generated(href: str) -> bool:
-    host = (urlparse(href).hostname or "").lower()
-    return any(host == site or host.endswith("." + site) for site in _GENERATED_HOSTS)
 # Bass forums, skipped only for requests that don't mention bass: a guitar amp request found a bass-amp thread and
 # the AI suggested a bass head and a bass cab.
 _BASS_SITES = ("talkbass.com", "basschat.co.uk")
@@ -307,13 +302,22 @@ def _topic_words(topic: str) -> set:
     return (words - _NOT_TOPIC) or words  # "bass tone" alone has nothing more distinctive to go on
 
 
+def _on_site(host: str, sites) -> bool:
+    """True when `host` is one of these sites or a subdomain of one."""
+    return any(host == site or host.endswith("." + site) for site in sites)
+
+
+def is_generated(href: str) -> bool:
+    return _on_site((urlparse(href).hostname or "").lower(), _GENERATED_HOSTS)
+
+
 def _skip_source(href: str) -> bool:
     parsed = urlparse(href)
     host = (parsed.hostname or "").lower()
     if _LISTING_PATH.search(parsed.path) or _PRESET_PATH.search(parsed.path):
         return True
-    return not host or any(host == pattern or host.endswith("." + pattern) or (pattern.endswith(".") and pattern in host)
-                           for pattern in _SKIP_HOSTS)
+    # A pattern ending in "." ("amazon.") matches the site in any country.
+    return not host or _on_site(host, _SKIP_HOSTS) or any(p.endswith(".") and p in host for p in _SKIP_HOSTS)
 
 
 # Sentences that change what nearby evidence means. These score highly on their own: without them the AI takes a
@@ -701,7 +705,7 @@ def _usable(found: list, seen: set, hosts: set, bass: bool) -> list:
     for result in found:
         href = str(result.get("href", "")).strip()
         host = (urlparse(href).hostname or "").lower().removeprefix("www.")
-        bass_site = any(host == site or host.endswith("." + site) for site in _BASS_SITES)
+        bass_site = _on_site(host, _BASS_SITES)
         if href and href not in seen and host not in hosts and not _skip_source(href) and (bass or not bass_site):
             seen.add(href)
             hosts.add(host)

@@ -377,3 +377,15 @@ def test_mcp_bad_ratings_follow_the_same_rules(calls):
     mcp_server.rate_result(first["topic"], "bad", comment="wrong amp", voter_id="m1")
     assert knowledge.get(app_module._library(), entry["id"])["status"] == "approved"
     assert not _search(client)["cached"]  # but the brief is worked out again
+
+
+def test_votes_on_an_entry_or_its_topics_newest_first(monkeypatch):
+    db = app_module._library()
+    times = iter([100.0, 200.0, 300.0])
+    monkeypatch.setattr(feedback.time, "time", lambda: next(times))
+    vote = dict(prompt="p", target="brief", vote=1)
+    feedback.record(db, voter_id="a", words="nolly bass", entry_id=7, **vote)
+    feedback.record(db, voter_id="b", words="periphery bass", **vote)
+    feedback.record(db, voter_id="c", words="other topic", **vote)
+    assert [v["voter"] for v in feedback.on_entry(db, 7, ["periphery bass"])] == ["b", "a"]
+    assert [v["voter"] for v in feedback.on_entry(db, 7)] == ["a"]  # no topics: only votes on the entry
