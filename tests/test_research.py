@@ -223,3 +223,37 @@ def test_a_sites_own_blurb_in_a_snippet_is_not_evidence():
     blurb[0]["body"] = "Gavin Rossdale played a Marshall JCM900 through most of the album sessions."
     assert "JCM900" in research.web_notes("Gavin Rossdale Bush guitar", search=lambda *a, **k: blurb,
                                           evidence=lambda href, topic: "")
+
+
+def test_search_words_keep_small_words_inside_titles():
+    assert research._search_words("Alice in Chains Man in the Box") == "Alice in Chains Man in the Box"
+    assert research._search_words("Megadeth Rust in Peace era tone") == "Megadeth Rust in Peace era"
+    assert research._search_words("the tone of Pink Floyd on Wish You Were Here") == "Pink Floyd on Wish You Were Here"
+
+
+def test_page_furniture_and_everyday_words_are_not_evidence():
+    holy = research._topic_words("Megadeth Holy Wars guitar")
+    assert not research._sentence_score("Holy Wars is the opening track off Megadeth's fourth studio album Rust in "
+                                        "Peace.", holy)  # 'studio album' says nothing about gear
+    assert research._sentence_score("Mustaine recorded Holy Wars in the studio through a modified Marshall JCM800.",
+                                    holy)
+    strung = research._topic_words("Strung Out band")
+    assert not research._sentence_score("The TSE X50 amp is a digital emulation of a famous US guitar amp, perfect "
+                                        "for anyone who wants to rock out.", strung)  # 'out' alone is everyday English
+    assert research._sentence_score("On Man in the Box, Cantrell ran a talk box into a Marshall JCM800 2203.",
+                                    research._topic_words("Alice in Chains Man in the Box"))
+    darkthrone = research._topic_words("Darkthrone Transilvanian Hunger")
+    assert not research._block_score("Feb. 17, 19941 viewer54.9K views", darkthrone, True)
+    found = [m for m in research._MODEL.findall("VH4 JC-40 L-500XL Stukka63 viewer54 9K 1-4354-5569-X")
+             if not research._NOT_MODEL.search(m)]
+    assert found == ["VH4", "JC-40", "L-500XL"]
+
+
+def test_lyrics_and_footnotes_are_not_evidence():
+    holy = research._topic_words("Megadeth Holy Wars guitar")
+    # 'understanding' once matched the qualifier 'stand-in'.
+    assert not research._sentence_score("There are still religious wars, still people who have no understanding of "
+                                        "other people's lives or their cultures.", holy)
+    footnote = ("↑ RIAA platinum sales, Megadeth. Recording Industry Association of America. Дата обращения: "
+                "7 октября 2011. Архивировано 15 марта 2013 года.")
+    assert not research._block_score(footnote, holy, True)  # scored whole, it mixed one reference with the next

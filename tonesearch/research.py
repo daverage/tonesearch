@@ -204,8 +204,10 @@ def _about_music(*texts: str, short: bool = False) -> bool:
 # A model-like token mixes letters and digits ("VH4", "JC-40", "AC30", "DS-1", "2x10", "40W"), but decades ("1970s")
 # and ordinals ("2nd") don't count...
 _MODEL = re.compile(r"(?<![\w-])(?=[\w-]*\d)(?=[\w-]*[a-z])[a-z0-9]+(?:-[a-z0-9]+)*(?![\w-])", re.IGNORECASE)
-_NOT_MODEL = re.compile(r"^\d+(s|st|nd|rd|th|x)$|\d[A-Z]?[a-z]{3,}|^[A-G](#|b)?(m|maj|min|sus|add|dim|aug)\d*$")
-# ...and not chords ("Gadd9", "Am7") or chord charts that run into lyrics ("Gadd9fail").
+_NOT_MODEL = re.compile(r"^\d+(s|st|nd|rd|th|x)$|\d[A-Z]?[a-z]{3,}|^[A-G](#|b)?(m|maj|min|sus|add|dim|aug)\d*$"
+                        r"|^[a-z]{5,}\d|^[A-Za-z][a-z]{4,}\d+$|^\d+[kKmM]$|^\d+(-\d+){2,}(-[\dXx])?$")
+# ...and not chords ("Gadd9", "Am7"), chord charts that run into lyrics ("Gadd9fail"), page furniture run together
+# ("1 viewer54.9K views": "viewer54", "9K"), commenters' names ("Stukka63") or ISBNs ("1-4354-5569-X").
 # A spec or rig-list line: "Amplifier: Diezel VH4", "JC-40: 40W stereo 2x10 combo".
 _LABEL = re.compile(r"^[A-Z][\w /&()-]{0,30}:\s+\S")
 # Words that say gear was actually used rather than just discussed ("recorded through", "plugged into").
@@ -284,9 +286,18 @@ def _search_words(query: str) -> str:
         return " ".join(words) or query.strip()
     kept = []
     for i, word in enumerate(words):
-        inside_name = (0 < i < len(words) - 1 and word.islower()
-                       and words[i - 1][:1].isupper() and words[i + 1][:1].isupper())
-        if inside_name or word.lower().strip(".'’") not in _FILLER_WORDS:
+        # A run of up to three small words between capitalised ones is part of a name: "Man in the Box", "Rust in
+        # Peace", "Knights of Cydonia". Dropping them searched for "Alice in Chains Man Box" and found MP3 sites.
+        start, end = i, i
+        while start > 0 and words[start - 1].islower() and i - start < 3:
+            start -= 1
+        while end < len(words) - 1 and words[end + 1].islower() and end - i < 3:
+            end += 1
+        inside_name = (word.islower() and start > 0 and end < len(words) - 1 and end - start < 3
+                       and words[start - 1][:1].isupper() and words[end + 1][:1].isupper())
+        # A capitalised small word next to another capitalised word is in a title too: "Wish You Were Here", "The Who".
+        in_title = word[:1].isupper() and any(0 <= j < len(words) and words[j][:1].isupper() for j in (i - 1, i + 1))
+        if inside_name or in_title or word.lower().strip(".'’") not in _FILLER_WORDS:
             kept.append(word)
     return " ".join(kept) or query.strip()
 
@@ -307,7 +318,7 @@ def _skip_source(href: str) -> bool:
 
 # Sentences that change what nearby evidence means. These score highly on their own: without them the AI takes a
 # site's suggestions and later-era gear as what was used on the record.
-_QUALIFIER = re.compile(r"modern equivalent|replica|recreat|reissue|stand-?in|substitut|instead of|our (catalog|catalogue)|"
+_QUALIFIER = re.compile(r"modern equivalent|replica|recreat|reissue|\bstand-?ins?\b|substitut|instead of|our (catalog|catalogue)|"
                         r"\bonly (two|three|\d+) (songs|tracks|tones)\b|not (confirmed|known|documented|the original)|"
                         r"unconfirmed|\bunknown\b|\bunclear\b|\blater\b (era|years|tours?)|\bera\b", re.IGNORECASE)
 # Weaker hedges and dates: kept when they sit next to chosen evidence, not chosen for themselves.
@@ -362,10 +373,17 @@ def _sentence_score(sentence: str, topic_words: set, page_on_topic: bool = False
     capitalised = sum(1 for w in re.findall(r"[A-Za-z][\w']*", sentence) if w[0].isupper())
     if capitalised > len(words) * 0.5 and not spec_line:  # Title Case runs are menus, headings and tag lists
         return 0
-    topic = len(set(words) & topic_words)
+    matched = set(words) & topic_words
+    # A short topic word alone is everyday English: "Strung Out" mustn't match "anyone who wants to rock out". With
+    # another topic word it counts ("Man in the Box").
+    if len(matched) == 1 and len(next(iter(matched))) <= 3 and any(len(w) > 3 for w in topic_words):
+        matched = set()
+    topic = len(matched)
     gear = len(set(words) & _GEAR_WORDS) + len(models) + bool(re.search(r"\bDI\b", sentence))  # not Italian "di"
     names = _names(sentence, topic_words)
-    used = len(set(words) & _USE_WORDS)
+    # "the band's fourth studio album" says nothing about gear; "in the studio" does.
+    studio_album_only = "studio" in words and not re.search(r"\bstudio\b(?!\s+albums?\b)", sentence, re.IGNORECASE)
+    used = len(set(words) & _USE_WORDS) - studio_album_only
     if _QUALIFIER.search(sentence) and (topic or page_on_topic):
         return 6 + topic * 2 + gear
     if topic:
@@ -486,7 +504,11 @@ def _block_score(block: str, topic_words: set, page_on_topic: bool, *, thread_on
     if not useful and not (forum and _OWN_RIG.search(block)):
         # Short structured lines can contain several specs separated by punctuation the extractor normalises away.
         direct = _sentence_score(block, topic_words, page_on_topic, thread_on_topic=thread_on_topic)
-        useful = [direct] if direct else []
+        # Only for gear specs: scored whole, a footnote list mixes "Megadeth" from one reference with "Recording
+        # Industry Association" from the next, and a name plus a 'use' word looks like evidence.
+        has_gear = set(re.findall(r"[a-z0-9']+", block.lower())) & _GEAR_WORDS or any(
+            not _NOT_MODEL.search(m) for m in _MODEL.findall(block))
+        useful = [direct] if direct and has_gear else []
     if not useful:
         return 0
     score = useful[0] + sum(useful[1:3]) // 2
