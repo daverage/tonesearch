@@ -324,3 +324,41 @@ def test_a_syndicated_copy_of_a_source_is_skipped():
     notes = research.web_notes("metallica black album", search=lambda q, n, **k: results,
                                evidence=lambda href, topic: pages[href.split("/")[2]])
     assert [line.split(":")[0] for line in notes.splitlines()] == ["- a.example", "- c.example"]
+
+
+_CATALOGUE = ("- envy Amp Settings: TelecasterModern equivalent: Fender American Professional II Telecaster Every track in "
+              "our catalog was tracked on a Marshall JCM800 2203. The Telecaster (modern equivalent: Fender American "
+              "Professional II Telecaster) appears on the most tracks, and the Bogner Ecstasy 101B (a modern equivalent) "
+              "on some. (https://catalogue.example)\n"
+              "- Buying guide: For those aiming to replicate the tone on modern amps, the Boss HM-2 could be used to push "
+              "your amp. (https://guide.example)")
+
+
+def test_gear_the_research_only_offers_as_a_stand_in_is_an_alternative():
+    body = {"summary": "s", "advice": [], "search_queries": ["Marshall JCM800 2203"],
+            "gear": [{"kind": "amp", "name": "Marshall JCM800 2203", "role": "main amp", "confidence": "best"},
+                     {"kind": "guitar", "name": "Fender Telecaster", "role": "main guitar", "confidence": "best"},
+                     {"kind": "guitar", "name": "Fender American Professional II Telecaster", "confidence": "close"},
+                     {"kind": "amp", "name": "Bogner Ecstasy 101B", "role": "amp", "confidence": "best"},
+                     {"kind": "effect", "name": "Boss HM-2", "role": "drive", "confidence": "close"}]}
+    plan = ai.plan_tone("envy A Dead Sinking Story", research_notes=_CATALOGUE, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    levels = {g["name"]: g["confidence"] for g in plan["gear"]}
+    assert levels == {"Marshall JCM800 2203": "best", "Fender Telecaster": "best",  # reported plainly
+                      "Fender American Professional II Telecaster": "alternative", "Bogner Ecstasy 101B": "alternative",
+                      "Boss HM-2": "alternative"}
+    assert "stand-in" in plan["gear"][3]["role"]
+
+
+def test_aliases_drop_genres_labels_and_gear_makers_but_keep_names():
+    notes = ("- Album: Doppelgänger is the second album by the American mathcore band The Fall of Troy, released in "
+             "2005 through Equal Vision Records. Thomas Erak played a Mesa Boogie Dual Rectifier. (https://w.example)")
+    body = {"summary": "A 2000s mathcore tone with glam rock riff energy.", "advice": [], "search_queries": [],
+            "aliases": ["mathcore", "Equal Vision Records", "Doppelganger 2005", "Thomas Erak", "Mesa Rectifier",
+                        "glam rock riff"],
+            "gear": [{"kind": "amp", "name": "Mesa Boogie Dual Rectifier", "confidence": "best"}]}
+    plan = ai.plan_tone("Fall of Troy Doppleganger riff", research_notes=notes, opener=lambda req, timeout: _Response(
+        {"choices": [{"message": {"content": json.dumps(body)}}]}))
+    # A genre is written in lower case, a label is a label, 'Mesa' makes the gear, and 'riff' is part of a song:
+    # only names are left, and the accent in "Doppelgänger" doesn't stop it supporting the alias.
+    assert plan["aliases"] == ["Doppelganger 2005", "Thomas Erak"]

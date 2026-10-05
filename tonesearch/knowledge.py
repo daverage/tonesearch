@@ -122,8 +122,12 @@ def _match_details(text: str, words: str, aliases: str = "", *, same_sound: bool
     # "Adam Getgood", but "Nolly Getgood bass" cannot be assembled from aliases "Nolly" and "Adam Getgood".
     # An alias stands in for part of the topic, never all of it: the request must still share one of the topic's own
     # words. Otherwise "James Hetfield" or "thrash metal" would get the research saved for one Metallica album.
-    if len(wanted) >= 2 and wanted & theirs:
+    # The alias must also supply a requested word the topic lacks: a request made only of topic words ("Alice in
+    # Chains" against "Alice in Chains Man in the Box") is less specific than the topic, whatever the aliases say.
+    if len(wanted) >= 2 and wanted & theirs and wanted - theirs:
         for alias in _alias_phrases(aliases):
+            if not (wanted - theirs) & alias:
+                continue
             known = theirs | alias
             if wanted <= known:
                 return MATCH_THRESHOLD - 0.01, len(wanted), False

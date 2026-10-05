@@ -165,13 +165,17 @@ def save_gear(description: str, gear: list, aliases: list | None = None) -> str:
     entry = knowledge.find(library_path(), description, count_use=False)
     if not entry:
         return "There's no saved research for this tone yet: call web_research first."
-    if aliases and not entry.get("aliases"):
-        knowledge.add_aliases(library_path(), entry["id"], [str(a)[:60] for a in aliases[:8]])
+    if aliases and not entry.get("aliases"):  # the website's rules: no genres, labels, gear or lone words
+        knowledge.add_aliases(library_path(), entry["id"], ai.filter_aliases(
+            description, [str(a)[:60] for a in aliases[:8] if isinstance(a, str)], evidence=entry["notes"], gear=items))
     if entry["gear"]:
         return "This research already has a gear list, so it was left as it is."
     # Only gear the research itself names: the library records what sources say, not what an assistant recalls.
     notes = entry["notes"].lower()
     supported = [g for g in items if ai.named_in(g["name"], notes)]
+    for g in supported:  # named only as a "modern equivalent" or a buying tip: a stand-in, never the artist's gear
+        if ai.suggested_only(g["name"], entry["notes"]):
+            g["confidence"] = "alternative"
     skipped = [g["name"] for g in items if g not in supported]
     if not supported:
         return ("Nothing saved: none of these appear in the research notes. Only save gear the notes name. "

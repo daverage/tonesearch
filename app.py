@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 
 from concurrent.futures import ThreadPoolExecutor
@@ -20,7 +21,7 @@ from urllib.parse import quote, urlencode, urlparse
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import ai, cab, cache, feedback, kaggle, knowledge, mcp_server, overrides
+from tonesearch import admin_mcp, ai, cab, cache, feedback, kaggle, knowledge, mcp_server, overrides
 from tonesearch import db as database
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
@@ -80,6 +81,11 @@ LIMITS["mcp_research"] = int(os.environ.get("TONESEARCH_MCP_RESEARCH_PER_HOUR", 
 REQUEST_BUDGET_SECONDS = float(os.environ.get("TONESEARCH_REQUEST_BUDGET_SECONDS", "85"))
 RANKING_RESERVE_SECONDS = 15  # kept back from the plan call so ranking has a chance to run
 LIBRARY_ADMIN_PASSWORD = os.environ.get("TONESEARCH_ADMIN_PASSWORD", "")  # the research library's review page; off when unset
+# The owner's admin MCP server (/admin/mcp): off when unset, and a short token doesn't turn it on.
+ADMIN_MCP_TOKEN = os.environ.get("TONESEARCH_ADMIN_MCP_TOKEN", "").strip()
+if ADMIN_MCP_TOKEN and len(ADMIN_MCP_TOKEN) < 32:
+    print("TONESEARCH_ADMIN_MCP_TOKEN needs at least 32 characters; the admin MCP server is off.", file=sys.stderr)
+    ADMIN_MCP_TOKEN = ""
 LOOKUP_CACHE: dict = {}  # (kind, query) -> (time, suggestions): autocomplete must not spend the 100/minute API limit
 LOOKUP_CACHE_SECONDS = 3600
 
@@ -278,6 +284,17 @@ ACTIVITY_EVENTS = (
 )
 
 
+UNDOCUMENTED_REASON = "Automatic: the research names none of the gear the AI chose."
+
+
+def _documents_no_gear(plan: dict, research: str) -> bool:
+    """True when fresh research names none of the plan's gear: the AI guessed the whole rig. Needs requests are
+    exempt, since their gear is chosen to meet the needs, not found in the artist's research."""
+    if not research.strip() or plan.get("requirements"):
+        return False
+    return not any(ai.named_in(g.get("name", ""), research) for g in plan.get("gear") or [])
+
+
 def _parse_gear(text: str) -> list:
     """Admin gear lines, "kind | name | role | confidence"; a line without a confidence level counts as "close"."""
     gear = []
@@ -312,44 +329,8 @@ def _sources(notes: str) -> list[dict]:
 app.jinja_env.filters["sources"] = _sources
 
 
-def _entry_links(db, entries: list) -> dict:
-    """What each library entry's research reaches: the topics of searches that used it (its own words, saved
-    answers built on it under any name, votes on it), how many saved answers, and its votes."""
-    answers = cache.answers_by_entry(db)
-    try:
-        votes = feedback.all_votes(db)
-    except sqlite3.Error:
-        votes = []
-    by_entry: dict = {}
-    by_words: dict = {}
-    for v in votes:
-        by_entry.setdefault(v["entry_id"], []).append(v)
-        by_words.setdefault(v["words"], []).append(v)
-    links = {}
-    for entry in entries:
-        on_entry = by_entry.get(entry["id"], [])
-        topics = {entry["words"]} | answers.get(entry["id"], set()) | {v["words"] for v in on_entry}
-        mine = {v["id"]: v for v in [*on_entry, *(v for t in topics for v in by_words.get(t, []))]}.values()
-        links[entry["id"]] = {"topics": sorted(t for t in topics if t), "answers": len(answers.get(entry["id"], ())),
-                              "good": sum(v["vote"] == 1 for v in mine), "bad": sum(v["vote"] == -1 for v in mine)}
-    return links
-
-
-def _delete_entry(db, entry_id: int) -> str:
-    """Delete a research entry and everything built on it: saved answers, plans and rankings for every topic that
-    used it, and the votes on those topics and on the entry itself."""
-    entry = knowledge.get(db, entry_id)
-    if not entry:
-        return f"Research #{entry_id} was already deleted."
-    link = _entry_links(db, [entry])[entry_id]
-    saved = sum(cache.forget_topic(db, words) for words in link["topics"])
-    try:
-        votes = feedback.forget(db, words=link["topics"], entry_id=entry_id)
-    except sqlite3.Error:
-        votes = 0
-    knowledge.delete(db, entry_id)
-    return (f"Deleted research #{entry_id} ({entry['topic']}), {saved} saved answer{'s' if saved != 1 else ''} and "
-            f"plan{'s' if saved != 1 else ''}, and {votes} vote{'s' if votes != 1 else ''}.")
+_entry_links = admin_mcp.entry_links  # shared with the admin MCP server
+_delete_entry = admin_mcp.delete_entry_and_links
 
 
 @app.get("/admin")
@@ -408,6 +389,24 @@ def admin_vote_delete(vote_id: int):
     message = "Deleted the vote." if deleted else "That vote was already deleted."
     return _back_to_admin(message, view="feedback", q=request.form.get("filter_q", "")[:100],
                           vote=request.form.get("filter_vote", ""))
+
+
+@app.post("/admin/mcp")
+def admin_mcp_endpoint():
+    """The owner's MCP server: their assistant reviews the research library (stateless JSON, like /mcp). Anything
+    without the token gets the same 404 as an unknown page, so the endpoint isn't advertised."""
+    auth = request.headers.get("Authorization", "")
+    # Claude.ai and ChatGPT connectors can only take a URL, so ?key= is accepted when no header is sent.
+    token = (auth[7:] if auth.lower().startswith("bearer ") else request.args.get("key", "")).strip()
+    if not ADMIN_MCP_TOKEN or not hmac.compare_digest(token.encode(), ADMIN_MCP_TOKEN.encode()):
+        return "Not found", 404
+    message = request.get_json(silent=True)
+    if not isinstance(message, dict):
+        return jsonify(mcp_server._error(None, -32700, "Send one JSON-RPC message as JSON.")), 400
+    reply = admin_mcp.handle(message)
+    if reply is None:
+        return "", 202
+    return jsonify(reply)
 
 
 def _back_to_admin(message: str, **keep: str):
@@ -507,13 +506,18 @@ def api_search():
             plan = ai.plan_tone(prompt, research_notes=planning_notes + research, history=history,
                                 deadline=deadline - RANKING_RESERVE_SECONDS)
             plan["words"] = words  # the topic it's saved under: a bad rating clears it there, whatever was asked
-            if reusable and not keep_shared:
+            undocumented = fresh_research and _documents_no_gear(plan, research)
+            if reusable and not keep_shared and not undocumented:  # a guessed plan isn't kept for anyone else
                 cache.put(_library(), plan_key, plan, words)
     except ai.AiError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
 
     if fresh_research:
         entry_id = knowledge.save(_library(), prompt, research, plan.get("gear"), plan.get("aliases"))
+        if entry_id and _documents_no_gear(plan, research):
+            # Kept for the owner to look at, but flagged, so later searches research it again instead of reusing it.
+            knowledge.flag(_library(), entry_id, UNDOCUMENTED_REASON)
+            warnings.append("The web research didn't document this rig, so the gear below is the AI's suggestion.")
         library = knowledge.get(_library(), entry_id) if entry_id else None  # a reported entry stays flagged
     elif library:
         if not library["gear"]:

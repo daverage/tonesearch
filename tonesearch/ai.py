@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional
 from urllib.error import HTTPError, URLError
@@ -841,6 +842,53 @@ def named_in(name: str, notes: str) -> bool:
     return len(found) >= min(2, len(words))  # a model word that wasn't found still counts as a word to match
 
 
+# Wording that offers gear rather than reporting it: tone sites put "(modern equivalent: Fender American Professional
+# II Telecaster)" next to the guitar on the record, and buying guides list what to buy "for those aiming to replicate"
+# a sound. A product the research names only like this is a stand-in, never the artist's gear.
+_SUGGESTS = re.compile(
+    r"\b(modern equivalents?|equivalent|recommend\w*|for (those|players|anyone|you)\b|budget|affordable|cheaper|"
+    r"alternatives? (to|for)|substitutes?|could be (used|utili[sz]ed)|you (can|could) (use|try)|consider|"
+    r"to recreate|for recreating|approximation|get close)\b", re.IGNORECASE)
+# "Bogner Ecstasy 101B (a modern equivalent)" and "Modern equivalent: Fender American Professional II Telecaster":
+# the few words the label points at, taken out as a clause of their own.
+# A sentence can offer gear and still report it: "his ESP LTD KH202, which is based on the ESP MM-290 he was using
+# around this era". Someone named using, playing or owning it makes it a report ("could be used" doesn't).
+_REPORTS = re.compile(r"\b(?:he|she|they|[A-Z][a-z]+)\s+(?:was using|were using|used|played|plays|recorded|owned)\b")
+_STAND_IN_NOTE = re.compile(r"(\S+(?: \S+){0,5}?)\s*\(\s*(?:an? )?(?:modern equivalent|substitute|replica)\s*\)"
+                            r"|(?:modern equivalent|substitute|replica)s?:\s*(\S+(?: \S+){0,5})", re.IGNORECASE)
+
+
+def _clauses(notes: str) -> tuple[list, list]:
+    """Research notes split into (plain, suggesting) clauses. A parenthesis or "X (a modern equivalent)" is its own
+    clause, so "The Telecaster (modern equivalent: Fender ... Telecaster) appears on most tracks" still reports the
+    Telecaster plainly."""
+    text = re.sub(r"https?://\S+", " ", notes)
+    suggesting = [" ".join(found) for found in _STAND_IN_NOTE.findall(text)]
+    text = _STAND_IN_NOTE.sub(" ", text)
+    plain_text = []
+    for part in re.split(r"(\([^()]*\))", text):
+        if part.startswith("(") and _SUGGESTS.search(part):
+            suggesting.append(part)
+        else:
+            plain_text.append(part)
+    plain = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", " ".join(plain_text)):
+        (suggesting if _SUGGESTS.search(sentence) and not _REPORTS.search(sentence) else plain).append(sentence)
+    return plain, suggesting
+
+
+def suggested_only(name: str, notes: str) -> bool:
+    """True when research names the product only as a modern equivalent, recommendation or substitute, so it is an
+    'alternative' whatever the model called it. A plain mention anywhere keeps it; "Telecaster" without the maker
+    is enough for "Fender Telecaster", since sources often leave the maker out."""
+    plain, suggesting = _clauses(notes)
+    if not any(named_in(name, clause) for clause in suggesting):
+        return False
+    words = name.split()
+    short = " ".join(words[1:]) if len(words) > 1 else name
+    return not any(named_in(name, clause) or named_in(short, clause) for clause in plain)
+
+
 def _same_gear(a: str, b: str) -> bool:
     """True when one name is the other with words left out: 'Deluxe Reverb' and 'Fender Deluxe Reverb', not
     'Fender Twin Reverb'."""
@@ -863,6 +911,16 @@ _KEYWORD_RULE = (
     "name.")
 
 
+_PART_WORDS = {"riff", "riffs", "solo", "solos", "rhythm", "lead", "leads", "intro", "verse", "chorus", "outro",
+               "clean", "heavy", "live", "studio"}
+_LABEL_WORDS = {"records", "recordings", "label"}  # 'Equal Vision Records' is a label: its artists have their own rigs
+
+
+def _plain_letters(text: str) -> str:
+    """Text without accents, so "Doppelgänger" in a source supports the alias "doppelganger"."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
 def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: list = (), needs: bool = False,
                    keywords: list = ()) -> list:
     """The names and keywords worth filing research under, stored together as the entry's aliases.
@@ -874,21 +932,37 @@ def filter_aliases(request: str, aliases: list, *, evidence: str = "", gear: lis
     keeps out the artists a sound's research mentions ('Jimi Hendrix blues' for "edge breakup blues"), which would
     hand its research to a search for their rig.
     Neither may be gear or a category. A wrong alias spreads research to later visitors, so these rules stay strict."""
+    request, evidence = _plain_letters(request), _plain_letters(evidence)
+    aliases = [_plain_letters(a) if isinstance(a, str) else a for a in aliases]
     asked = set(re.findall(r"[a-z0-9]+", request.lower()))
     items = [(g.get("name", ""), g.get("role", "")) if isinstance(g, dict) else (g.name, g.role) for g in gear]
     known = set(re.findall(r"[a-z0-9]+", " ".join([evidence, *(f"{n} {r}" for n, r in items)]).lower()))
+    # Names are written with capitals ("Thomas Erak", "Equal Vision"); genres and sounds aren't ("mathcore", "hard
+    # rock"). Sentence starts are capitalised too, so this lets some through, but never a genre written mid-sentence.
+    capitalised = {w.lower() for w in re.findall(r"[A-Za-z0-9]+", " ".join([evidence, *(n for n, _ in items)]))
+                   if w[0].isupper()}
+    makers = {name.split()[0].lower() for name, _ in items if len(name.split()) > 1} - asked
 
     def in_request(alias: str) -> bool:
-        return bool(set(re.findall(r"[a-z0-9]+", alias.lower())) & asked - _COMMON_WORDS)
+        # 'riff' or 'rhythm' is a part of a song, not a name: 'glam rock riff' doesn't share the request's subject.
+        return bool(set(re.findall(r"[a-z0-9]+", alias.lower())) & asked - _COMMON_WORDS - _PART_WORDS)
 
     def supported(alias: str) -> bool:
         words = set(re.findall(r"[a-z0-9]+", alias.lower())) - {"the", "and", "of", "a", "an"}
-        return in_request(alias) or bool(words) and words <= known
+        if in_request(alias):
+            return True
+        # Only from the evidence: it must be written there as a name, and not be a record label.
+        # Titles keep small words in lower case ("Sad but True", "Rust in Peace era"), so half is enough.
+        lettered = [w for w in words if not re.fullmatch(r"\d+s?", w)]
+        return (bool(words) and words <= known and not words & _LABEL_WORDS
+                and 2 * sum(w in capitalised for w in lettered) >= len(lettered))
 
     def names_gear(alias: str) -> bool:
         # 'Ibanez TQM2' or 'Telecaster' would hand this answer to a search for that gear; the player's name in their
         # own signature product ('Nolly' in 'Dingwall NG-3 Nolly Signature') stays.
         words = set(re.findall(r"[a-z0-9]+", alias.lower()))
+        if words & makers:
+            return True  # 'marshall plexi', 'fender tweed deluxe': a maker of this rig's gear the request didn't name
         for name, role in items:
             if not name or not words <= set(re.findall(r"[a-z0-9]+", name.lower())):
                 continue
@@ -954,7 +1028,8 @@ def _whole_lines(text: str, limit: int) -> str:
 # Saved plans and answers are filed under this, so raising it makes every search work its plan out again. Raise it
 # whenever plan_tone's rules change what a plan contains (as when aliases began to be checked against the evidence):
 # otherwise searches reuse plans made by the old rules for up to 30 days (cache.AI_SECONDS).
-PLAN_VERSION = 4  # 3: keywords for every request; 4: gear the research never names is an alternative
+PLAN_VERSION = 5  # 3: keywords for every request; 4: gear the research never names is an alternative;
+# 5: gear it only offers as a stand-in is an alternative, and aliases must be names (no genres, labels or makers)
 
 
 def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] = None, opener=urlopen,
@@ -1036,6 +1111,9 @@ def plan_tone(prompt: str, *, research_notes: str = "", history: Optional[list] 
             if gear.confidence != "alternative" and not named_in(gear.name, research_notes):
                 gear.confidence = "alternative"
                 gear.role = f"{gear.role.strip()} (not named in the research)".strip()
+            elif gear.confidence != "alternative" and suggested_only(gear.name, research_notes):
+                gear.confidence = "alternative"
+                gear.role = f"{gear.role.strip()} (the research only suggests it as a stand-in)".strip()
     queries = [q.strip()[:80] for q in plan.search_queries if q and not _generic(q)]
     # Recording gear is never what a capture captures; a guitar only is when the player wants guitar captures.
     uncapturable = ("mic",) if _WANTS_GUITAR.search(prompt) else ("mic", "guitar", "pickup")

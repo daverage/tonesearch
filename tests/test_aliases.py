@@ -45,6 +45,16 @@ def test_match_score_rules():
     assert knowledge.match_score("Nolly bass warm", words, aliases) > 0  # but the research still applies
 
 
+def test_an_alias_must_add_a_word_the_topic_lacks():
+    words = " ".join(knowledge.topic_words("Alice in Chains Man in the Box"))
+    # The whole band is less specific than one song: an alias that adds nothing must not let it through.
+    assert knowledge.match_score("Alice in Chains", words, "man box") == 0
+    assert knowledge.match_score("Alice in Chains", words, "") == 0
+    words = " ".join(knowledge.topic_words("James Hetfield Master of Puppets"))
+    assert knowledge.match_score("James Hetfield", words, "metallica 1986") == 0
+    assert knowledge.match_score("Hetfield Master of Puppets", words, "metallica 1986") > 0  # direct match
+
+
 def test_aliases_are_cleaned_of_descriptions():
     assert knowledge.clean_aliases(["Nolly", "Adam Getgood", "warm and punchy", "Nolly"]) == ["nolly", "adam getgood"]
 
@@ -69,8 +79,9 @@ def test_mcp_finds_the_saved_answer_by_alias(calls):
 def test_mcp_save_gear_fills_empty_aliases():
     mcp_server.web_research("Periphery bass", notes=lambda text: NOTES)
     mcp_server.save_gear("Periphery bass", [{"kind": "effect", "name": "Darkglass B7K", "confidence": "confirmed"}],
-                         aliases=["Nolly", "Adam Getgood"])
-    assert knowledge.find(app_module._library(), "Adam Getgood bass")["notes"] == NOTES
+                         aliases=["Nolly", "Adam Getgood", "djent"])
+    # The website's rules: the notes name Nolly, but nothing names Adam Getgood, and a genre is never a name.
+    assert knowledge.find(app_module._library(), "Nolly bass")["aliases"] == "nolly"
 
 
 def test_admin_edits_aliases(monkeypatch):

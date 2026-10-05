@@ -76,6 +76,35 @@ def test_search_reuses_library_and_saves_fresh_research(monkeypatch):
     assert client.post("/api/library/999/flag", json={}).status_code == 404
 
 
+def test_research_that_names_none_of_the_gear_is_flagged_not_reused(monkeypatch):
+    calls = []
+    album_only = "- Album: Plague of Butterflies is an EP by Swallow the Sun, released in 2008. (https://example.com/p)"
+    monkeypatch.setattr(app_module, "web_notes", lambda prompt: calls.append(prompt) or album_only)
+    plans = []
+    monkeypatch.setattr(app_module.ai, "plan_tone", lambda *a, **k: plans.append(1) or {
+        "summary": "s", "advice": [], "search_queries": ["Peavey 6505"],
+        "gear": [{"kind": "amp", "name": "Peavey 6505+", "role": "guess", "confidence": "alternative"}]})
+    monkeypatch.setattr(app_module, "tone3000_search", lambda *a, **k: [])
+    client = app_module.app.test_client()
+    body = client.post("/api/search", json={"prompt": "Swallow the Sun Plague of Butterflies", "use_research": True})
+    body = body.get_json()
+    assert any("AI's suggestion" in w for w in body["warnings"])
+    entry = knowledge.get(app_module._library(), body["library"]["id"])
+    assert entry["status"] == "flagged" and entry["flag_reason"] == app_module.UNDOCUMENTED_REASON
+    client.post("/api/search", json={"prompt": "Swallow the Sun Plague of Butterflies", "use_research": True})
+    assert len(calls) == 2 and len(plans) == 2  # neither the research nor the guessed plan was reused
+
+
+def test_research_that_names_the_gear_is_kept(monkeypatch):
+    monkeypatch.setattr(app_module, "web_notes", lambda prompt: NOTES)
+    monkeypatch.setattr(app_module.ai, "plan_tone", lambda *a, **k: {
+        "summary": "s", "advice": [], "gear": GEAR, "search_queries": ["Bad Cat"]})
+    monkeypatch.setattr(app_module, "tone3000_search", lambda *a, **k: [])
+    body = app_module.app.test_client().post(
+        "/api/search", json={"prompt": "Porcupine Tree In Absentia", "use_research": True}).get_json()
+    assert body["library"]["status"] == "new" and not body["warnings"]
+
+
 def test_mcp_research_reads_and_writes_the_library(monkeypatch):
     found = mcp_server.web_research("Porcupine Tree In Absentia", notes=lambda text: NOTES)
     assert found == NOTES

@@ -166,6 +166,16 @@ def all_votes(db: Path) -> list[dict]:
         return [dict(row) for row in connection.execute("SELECT id, words, entry_id, vote FROM feedback")]
 
 
+def on_entry(db: Path, entry_id: int, words=(), limit: int = 30) -> list[dict]:
+    """Recent votes on a research entry or on any of these topics, newest first, with their comments."""
+    words = [w for w in words if w] or [""]  # no topic word is empty, so [""] matches nothing
+    marks = ", ".join("?" * len(words))
+    with _connect(db) as connection:
+        return [dict(row) for row in connection.execute(
+            f"SELECT * FROM feedback WHERE entry_id = ? OR words IN ({marks}) ORDER BY created DESC LIMIT ?",
+            [entry_id, *words, limit])]
+
+
 def forget(db: Path, *, words=(), entry_id: int | None = None) -> int:
     """Delete the votes for these topics and for this research entry; how many were deleted."""
     words = [w for w in words if w]
