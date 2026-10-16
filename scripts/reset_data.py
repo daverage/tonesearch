@@ -2,7 +2,7 @@
 
     python scripts/reset_data.py                    # show what is stored; changes nothing
     python scripts/reset_data.py --all --yes        # start completely fresh
-    python scripts/reset_data.py --votes --yes      # just the votes (also --library, --answers, --activity, --limits)
+    python scripts/reset_data.py --votes --yes      # just the votes (also --library, --answers, --activity, --limits, --shares)
 
 Data lives in $TONESEARCH_DATA_DIR (default: the data/ folder next to app.py), so run it with the same environment
 as the app. Rows are deleted rather than files, so it is safe while the app is running. Clearing the library also
@@ -25,6 +25,7 @@ PARTS = {
     "votes": ("knowledge.sqlite3", ("feedback",), "votes on briefs and packs"),
     "activity": ("knowledge.sqlite3", ("activity",), "daily activity counts"),
     "limits": ("limits.sqlite3", None, "hourly rate-limit counters"),  # None: every table in the file
+    "shares": ("shares.sqlite3", None, "share links, and answers kept to be shared"),
 }
 
 
@@ -55,7 +56,7 @@ def main() -> int:
         mark = "  will clear" if name in chosen else ""
         print(f"  {description:<55} {sum(counts.values()):>7} rows{mark}")
     if not chosen:
-        print("\nNothing chosen. Add --all, or --library/--answers/--votes/--activity/--limits, and --yes.")
+        print("\nNothing chosen. Add --all, or --library/--answers/--votes/--activity/--limits/--shares, and --yes.")
         return 0
     if not args.yes:
         print("\nDry run: add --yes to delete.")

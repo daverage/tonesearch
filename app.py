@@ -21,7 +21,7 @@ from urllib.parse import quote, urlencode, urlparse
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from werkzeug.utils import secure_filename
 
-from tonesearch import admin_mcp, ai, cab, cache, feedback, kaggle, knowledge, mcp_server, overrides
+from tonesearch import admin_mcp, ai, cab, cache, feedback, kaggle, knowledge, mcp_server, overrides, shares
 from tonesearch import db as database
 from tonesearch import research
 from tonesearch.research import (tone3000_lookup, tone3000_model_download, tone3000_models, tone3000_pack_zip,
@@ -70,6 +70,7 @@ LIMITS = {
     "mcp": int(os.environ.get("TONESEARCH_MCP_CALLS_PER_HOUR", "120")),
     "flag": 20,  # "wrong research" reports
     "feedback": 60,  # brief and pack ratings
+    "share": 30,  # share links made
     # Cab embed trains on the visitor's own Kaggle account; these only protect this server.
     "cab_jobs": int(os.environ.get("TONESEARCH_CAB_JOBS_PER_HOUR", "6")),
     "cab_status": 600,  # job status checks and downloads (the page checks every 30 seconds)
@@ -95,6 +96,10 @@ def _library() -> Path:
 
 
 mcp_server.library_path = _library  # the hosted MCP endpoint shares the website's research library
+
+
+def _shares() -> Path:
+    return DATA_DIR / "shares.sqlite3"
 
 
 def _visitor() -> str:
@@ -427,10 +432,14 @@ def _back_to_admin(message: str, **keep: str):
 
 @app.get("/")
 def index():
+    return _index_page()
+
+
+def _index_page(**share):
     local = ai.local_model()
     return render_template("index.html", ai_ready=ai.is_configured(), ai_local=local,
                            searches_per_hour=0 if local else LIMITS["search"],
-                           mcp_calls_per_hour=LIMITS["mcp"], mcp_research_per_hour=LIMITS["mcp_research"])
+                           mcp_calls_per_hour=LIMITS["mcp"], mcp_research_per_hour=LIMITS["mcp_research"], **share)
 
 
 @app.post("/api/search")
@@ -470,8 +479,8 @@ def api_search():
             feedback.apply_votes(saved["results"], feedback.pack_votes(_library(), saved_words))
             brief = feedback.brief_id(saved.get("plan"))
             # No AI, web or TONE3000 calls, so no hourly limit spent
-            return jsonify({**saved, "cached": True, "brief_id": brief,
-                            "rated_good": feedback.brief_votes(_library(), brief)[0]})
+            answer = {**saved, "cached": True, "brief_id": brief, "rated_good": feedback.brief_votes(_library(), brief)[0]}
+            return jsonify(_shareable(prompt, answer))
 
     if not _brings_own("provider", "api_key", "tone3000_api_key") and _over_limit("search"):
         return _limited()
@@ -606,7 +615,47 @@ def api_search():
         cache.put(_library(), result_key, {**body, "library": body["library"] and {**body["library"], "reused": True}},
                   words)
     feedback.apply_votes(packs, feedback.pack_votes(_library(), words))
-    return jsonify({**body, "cached": False})
+    return jsonify(_shareable(prompt, {**body, "cached": False}))
+
+
+def _shareable(prompt: str, answer: dict) -> dict:
+    """The answer with the id a share link names it by (empty when it couldn't be kept)."""
+    kind = "filters" if answer.get("reused_plan") else "search"
+    return {**answer, "answer_id": shares.remember(_shares(), prompt.strip(), kind, answer)}
+
+
+@app.post("/api/shares")
+def api_share_create():
+    ids = (request.get_json(silent=True) or {}).get("answers")
+    if (not isinstance(ids, list) or not 0 < len(ids) <= shares.MAX_TURNS
+            or not all(isinstance(i, str) and 0 < len(i) <= 32 for i in ids)):
+        return jsonify({"error": f"Share between 1 and {shares.MAX_TURNS} searches."}), 400
+    if _over_limit("share"):
+        return _limited()
+    try:
+        share_id = shares.create(_shares(), ids)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 410
+    except sqlite3.Error:
+        return jsonify({"error": "The link couldn't be made just now. Try again in a moment."}), 503
+    return jsonify({"id": share_id, "url": f"{request.url_root}s/{share_id}"})
+
+
+@app.get("/api/shares/<share_id>")
+def api_share_get(share_id: str):
+    snapshot = shares.get(_shares(), share_id)
+    if snapshot is None:
+        return jsonify({"error": "That shared search doesn't exist."}), 404
+    return jsonify(snapshot)
+
+
+@app.get("/s/<share_id>")
+def shared_page(share_id: str):
+    snapshot = shares.get(_shares(), share_id)
+    first = next((t for t in snapshot["turns"] if t["kind"] == "search"), None) if snapshot else None
+    return _index_page(share_id=share_id if snapshot else "", share_missing=snapshot is None,
+                       share_prompt=first["prompt"] if first else "",
+                       share_summary=first["data"]["plan"]["summary"] if first else ""), 200 if snapshot else 404
 
 
 def _saved_plan(key: str) -> tuple[dict | None, str]:

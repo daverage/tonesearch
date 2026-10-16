@@ -1,0 +1,6 @@
+{# The site's sections, at the top of every page. Pages set `tab` before including this. #}
+<nav class="site-tabs" aria-label="TONE Search sections">
+  <a href="./"{% if tab == "search" %} aria-current="page"{% endif %}>Tone search</a>
+  <a href="tools"{% if tab == "tools" %} aria-current="page"{% endif %}>File tools</a>
+  <a href="cab"{% if tab == "cab" %} aria-current="page"{% endif %}>Cab embed</a>
+</nav>

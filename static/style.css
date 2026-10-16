@@ -21,6 +21,7 @@
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--accent); }
 .page { max-width: 1180px; margin: 0 auto; padding: 2rem 16px 3rem; }
+.page:has(> .site-tabs) { padding-top: 0.75rem; }
 .masthead h1 { margin: 0.1rem 0 0.4rem; font-size: 2rem; letter-spacing: -0.02em; }
 .eyebrow { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
 .intro { margin: 0 0 1.4rem; max-width: 100%; color: var(--text-muted); }
@@ -487,11 +488,17 @@ a:hover { text-decoration-thickness: 2px; }
   .tool-step, .cab-state, .file-pick-target, .cab-job { border: 1px solid CanvasText; }
 }
 
-/* NAM tool pages: the nav between them, the NAMCore check and the facts list (templates/tools.html) */
-.tool-nav { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 1.2rem; }
-.tool-nav a { display: inline-flex; align-items: center; min-height: 2.25rem; padding: 0.3rem 0.85rem; border: 1px solid var(--control-border); border-radius: 999px; background: var(--panel); color: var(--text); font-size: 0.85rem; font-weight: 500; text-decoration: none; }
-.tool-nav a:hover { border-color: var(--accent); color: var(--accent); }
-.tool-nav a[aria-current="page"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); font-weight: 600; }
+/* The site's sections as tabs along the top of every page (templates/_tabs.html) */
+.site-tabs { display: flex; gap: 0.25rem; margin: 0 0 1.5rem; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.site-tabs a { display: inline-flex; align-items: center; flex: none; min-height: 2.75rem; padding: 0.3rem 0.9rem; margin-bottom: -1px; border-bottom: 3px solid transparent; color: var(--text-muted); font-size: 0.95rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.site-tabs a:hover { color: var(--text); border-bottom-color: var(--control-border); }
+.site-tabs a[aria-current="page"] { color: var(--accent); border-bottom-color: var(--accent); }
+.site-tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px 6px 0 0; }
+.is-session .site-tabs { margin-bottom: 1rem; }
+@media (max-width: 480px) { .site-tabs a { padding: 0.3rem 0.65rem; font-size: 0.9rem; } }
+@media (forced-colors: active) { .site-tabs a[aria-current="page"] { border-bottom-color: Highlight; } }
+
+/* NAM tool pages: the NAMCore check and the facts list (templates/tools.html) */
 .tool-check { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.7rem 0.85rem; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 9px; background: var(--panel-alt); font-size: 0.9rem; line-height: 1.45; }
 .tool-check .spinner { margin-top: 0.15rem; }
 .tool-check:not([data-state="running"]) .spinner { display: none; }
@@ -509,8 +516,7 @@ a:hover { text-decoration-thickness: 2px; }
 .tool-actions { gap: 0.5rem; flex-wrap: wrap; }
 .tool-box .field input[type="number"] { max-width: 9rem; }
 @media (max-width: 480px) { .tool-facts { grid-template-columns: 1fr; gap: 0.1rem; } .tool-facts dd { margin-bottom: 0.45rem; } .tool-actions .btn { flex: 1 1 100%; } }
-@media (pointer: coarse) { .tool-nav a { min-height: 44px; } }
-@media (forced-colors: active) { .tool-check, .tool-nav a { border: 1px solid CanvasText; } }
+@media (forced-colors: active) { .tool-check { border: 1px solid CanvasText; } }
 .tool-check p { margin: 0; }
 .tool-check-detail { margin-top: 0.2rem !important; font-size: 0.82rem; color: var(--text-muted); }
 .tool-check-detail:empty { display: none; }
@@ -549,3 +555,12 @@ a:hover { text-decoration-thickness: 2px; }
 .mcp-snippet pre code { overflow-wrap: normal; }
 @media (max-width: 480px) { .mcp-snippet { flex-direction: column; align-items: stretch; } }
 @media (forced-colors: active) { .mcp-snippet pre, .mcp-key-status { border: 1px solid CanvasText; } }
+
+/* Share links (the Share button in the composer) */
+.share-box { margin-top: 0.75rem; padding: 0.7rem 0.8rem; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel-alt); }
+.share-box > label { display: block; margin-bottom: 0.35rem; font-weight: 600; font-size: 0.9rem; }
+.share-row { display: flex; gap: 0.5rem; }
+.share-row input { flex: 1; min-width: 0; }
+.share-box .filter-help { margin: 0.4rem 0 0; }
+.shared-banner { margin: 0 0 1rem; padding: 0.6rem 0.85rem; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel); font-size: 0.9rem; }
+@media (max-width: 480px) { .share-row { flex-wrap: wrap; } .share-row .btn { flex: 1 1 100%; } }

@@ -100,6 +100,41 @@ def test_search_ranks_and_rate_limits(client, monkeypatch):
     assert again["cached"] and [p["id"] for p in again["results"]] == [1, 2]
 
 
+def test_share_links_hold_only_answers_this_server_gave(client, monkeypatch):
+    monkeypatch.setattr(ai, "plan_tone", lambda *a, **k: {"summary": "Plexi roar", "advice": [], "gear": [], "search_queries": ["A"]})
+    monkeypatch.setattr(app_module, "tone3000_search", lambda q, **k: [{"id": 1, "title": "one"}])
+    monkeypatch.setattr(ai, "rank_packs", lambda *a, **k: {1: {"fit": 90, "why": "w"}})
+    first = client.post("/api/search", json={"prompt": "Plexi crunch"}).get_json()
+    cached = client.post("/api/search", json={"prompt": "Plexi crunch"}).get_json()
+    assert first["answer_id"] and cached["cached"] and cached["answer_id"] not in ("", first["answer_id"])
+    made = client.post("/api/shares", json={"answers": [first["answer_id"]]}).get_json()
+    assert made["url"].endswith(f"/s/{made['id']}")
+    shared = client.get(f"/api/shares/{made['id']}").get_json()
+    assert [(t["prompt"], t["kind"]) for t in shared["turns"]] == [("Plexi crunch", "search")]
+    assert shared["turns"][0]["data"]["results"][0]["ai_fit"] == 90
+    html = client.get(f"/s/{made['id']}").get_data(as_text=True)
+    assert f'data-share="{made["id"]}"' in html and "<title>Plexi crunch: shared tone search" in html
+    assert 'content="Plexi roar"' in html and 'name="robots" content="noindex"' in html
+    # A visitor who opened the link and searched on can share the lot.
+    more = client.post("/api/shares", json={"answers": [f"{made['id']}/0", cached["answer_id"]]}).get_json()
+    assert len(client.get(f"/api/shares/{more['id']}").get_json()["turns"]) == 2
+    # Made-up answers, missing turns and unknown links are refused.
+    assert client.post("/api/shares", json={"answers": ["invented"]}).status_code == 410
+    assert client.post("/api/shares", json={"answers": [f"{made['id']}/5"]}).status_code == 410
+    assert client.post("/api/shares", json={"answers": []}).status_code == 400
+    assert client.post("/api/shares", json={"answers": [{"data": {}}]}).status_code == 400
+    assert client.get("/api/shares/nope").status_code == 404
+    missing = client.get("/s/nope")
+    assert missing.status_code == 404 and "doesn't exist" in missing.get_data(as_text=True)
+
+
+def test_every_page_has_the_section_tabs(client):
+    for path, current in (("/", "Tone search"), ("/tools", "File tools"), ("/cab", "Cab embed")):
+        html = client.get(path).get_data(as_text=True)
+        assert 'class="site-tabs"' in html and f'aria-current="page">{current}</a>' in html
+        assert html.count('aria-current="page"') == 1
+
+
 def test_page_renders_with_script_root(client):
     html = client.get("/", base_url="http://localhost/tonesearch/").get_data(as_text=True)
     assert '<base href="/tonesearch/">' in html and "not configured" in html

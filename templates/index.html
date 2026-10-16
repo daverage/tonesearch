@@ -4,7 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="{{ request.script_root }}/">
+  {% if share_prompt %}
+  <title>{{ share_prompt|truncate(70) }}: shared tone search | TONE Search</title>
+  <meta name="robots" content="noindex">
+  {% else %}
   <title>TONE Search: find NAM captures for any guitar or bass tone</title>
+  {% endif %}
   {% if adsense_client %}<meta name="google-adsense-account" content="{{ adsense_client }}">{% endif %}
   <meta name="description" content="Describe the guitar or bass tone you want, from a famous record or in your own words. AI explains the tone and gear, then finds and ranks matching Neural Amp Modeler (NAM) captures on TONE3000.">
   <meta name="keywords" content="NAM, Neural Amp Modeler, TONE3000, amp captures, guitar tone, bass tone, amp profiles, tone matching">
@@ -15,8 +20,13 @@
   <link rel="apple-touch-icon" href="static/apple-touch-icon.png">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="TONE Search">
+  {% if share_prompt %}
+  <meta property="og:title" content="{{ share_prompt|truncate(90) }} | TONE Search">
+  <meta property="og:description" content="{{ share_summary|truncate(200) }}">
+  {% else %}
   <meta property="og:title" content="TONE Search: find NAM captures for any guitar or bass tone">
   <meta property="og:description" content="Describe a tone in plain words. AI works out the amps and gear behind it and ranks matching NAM captures from TONE3000.">
+  {% endif %}
   <meta property="og:url" content="{{ request.base_url }}">
   <meta property="og:image" content="{{ request.url_root }}static/og-image.png">
   <meta property="og:image:width" content="1200">
@@ -34,13 +44,13 @@
   </script>
   <link rel="stylesheet" href="static/v{{ asset_version }}/style.css">
 </head>
-<body data-ad-client="{{ adsense_client }}" data-ad-slot="{{ adsense_slot }}" data-ai-local="{{ ai_local }}">
+<body data-share="{{ share_id or '' }}" data-ad-client="{{ adsense_client }}" data-ad-slot="{{ adsense_slot }}" data-ai-local="{{ ai_local }}">
   <a class="skip-link" href="#tone3000-ai-prompt">Skip to the tone search</a>
   <div class="page">
+    {% set tab = "search" %}{% include "_tabs.html" %}
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM capture discovery</div>
-        <a href="tools" class="btn-small-link">NAM tools</a>
         <button type="button" id="btn-about" class="link-btn btn-small-link" aria-haspopup="dialog">How it works</button>
         <button type="button" id="btn-settings" class="btn btn-secondary btn-small" aria-haspopup="dialog">Settings<span id="settings-badge" class="settings-badge" hidden> · your keys</span></button>
       </div>
@@ -54,6 +64,10 @@
     </header>
 
     <main id="main">
+
+    {% if share_missing %}
+    <p class="notice">That shared search link doesn't exist. It may have been mistyped; you can start a new search below.</p>
+    {% endif %}
 
     {% if not ai_ready %}
     <p class="notice" id="server-ai-notice">The AI provider is not configured on this server yet, so searches will fail. Add your own AI key in Settings, or the site owner needs to set the AI environment variables (see README.md).</p>
@@ -72,10 +86,20 @@
             Filters<span id="filters-count" class="filters-count" hidden></span>
           </button>
           <span class="spacer"></span>
+          <button type="button" id="btn-share" class="btn btn-secondary btn-small" hidden aria-describedby="share-help" aria-controls="share-box">Share</button>
+          <span id="share-help" class="visually-hidden">Makes a link that shows these searches and results to anyone who opens it. Your keys and settings are never included.</span>
           <button type="button" id="btn-export" class="btn btn-secondary btn-small" hidden aria-describedby="export-help">Export</button>
           <span id="export-help" class="visually-hidden">Downloads this conversation as a Markdown file. Your keys are never included.</span>
           <button type="button" id="btn-t3ai-reset" class="btn btn-secondary btn-small" hidden>Start over</button>
           <button type="button" id="btn-tone3000-ai-search" class="btn btn-primary btn-small">Find tones</button>
+        </div>
+        <div id="share-box" class="share-box" hidden>
+          <label for="share-url">Link to these searches</label>
+          <div class="share-row">
+            <input id="share-url" type="url" readonly>
+            <button type="button" id="btn-share-copy" class="btn btn-secondary btn-small">Copy link</button>
+          </div>
+          <p class="filter-help">Anyone with the link sees these briefs and packs as they are now, and can carry on searching from them.</p>
         </div>
         <p id="filters-summary" class="filters-summary" hidden></p>
         <div id="filters-panel" class="filters" role="group" aria-labelledby="filters-heading" hidden>

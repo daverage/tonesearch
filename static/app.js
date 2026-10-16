@@ -15,6 +15,9 @@
   const searchBtn = document.getElementById("btn-tone3000-ai-search");
   const resetBtn = document.getElementById("btn-t3ai-reset");
   const exportBtn = document.getElementById("btn-export");
+  const shareBtn = document.getElementById("btn-share");
+  const shareBox = document.getElementById("share-box");
+  const shareUrl = document.getElementById("share-url");
 
   const state = { history: [], goal: "", busy: false, plan: null, searchedFilters: null, log: [], packChats: new Map() };
   const GEAR_LABELS = { amp: "Amp head", "amp-cab": "Full rig", amp_cab: "Full rig", "full-rig": "Full rig", pedal: "Pedal", outboard: "Outboard", ir: "IR" };
@@ -718,14 +721,7 @@
       const data = await post("api/search", {
         prompt, use_research: research.checked, filters: filters.current(), history: state.history, fresh,
       });
-      state.topic = data.topic;
-      if (!state.goal) state.goal = prompt;
-      else state.goal = `${state.goal} / refined: ${prompt}`.slice(-600);
-      state.history.push({ role: "user", content: prompt }, { role: "assistant", content: data.plan.summary });
-      state.history = state.history.slice(-12);
-      state.plan = { summary: data.plan.summary, search_queries: data.queries };
-      state.log.push({ kind: "search", at: new Date(), prompt, data });
-      exportBtn.hidden = false;
+      recordSearch(prompt, data);
       renderBrief(turn, data);
       renderResults(data);
       announce(`Tone brief ready. ${data.plan.summary} ${status.textContent}`);
@@ -740,6 +736,24 @@
     } finally {
       stop(); setBusy(false);
     }
+  }
+
+  // Keeps a search's answer: the conversation the AI sees next, the plan filters re-use, and the log that Export
+  // and Share are made from.
+  function recordSearch(prompt, data, at = new Date()) {
+    state.topic = data.topic;
+    if (!state.goal) state.goal = prompt;
+    else state.goal = `${state.goal} / refined: ${prompt}`.slice(-600);
+    state.history.push({ role: "user", content: prompt }, { role: "assistant", content: data.plan.summary });
+    state.history = state.history.slice(-12);
+    state.plan = { summary: data.plan.summary, search_queries: data.queries };
+    logged({ kind: "search", at, prompt, data });
+  }
+
+  function logged(entry) {
+    state.log.push(entry);
+    exportBtn.hidden = false; shareBtn.hidden = false;
+    shareBox.hidden = true; // a link made earlier doesn't include this
   }
 
   // A saved answer looked wrong or stale: drop that turn and work the same request out from scratch.
@@ -826,7 +840,7 @@
       });
       stop();
       renderResults(data);
-      state.log.push({ kind: "filters", at: new Date(), data });
+      logged({ kind: "filters", at: new Date(), data });
       announce(status.textContent);
       if (!grid.hidden) {
         grid.scrollIntoView({ behavior: motion(), block: "start" });
@@ -915,11 +929,79 @@
   }
   exportBtn.addEventListener("click", exportConversation);
 
+  // Share: the server keeps each answer it gives for a few days, so a link names those answers rather than sending
+  // them back. Turns opened from another link name that link's turns. Pack questions aren't included.
+  async function shareConversation() {
+    const refs = state.log.map((entry) => entry.data.answer_id || entry.data.share_ref).filter(Boolean).slice(-20);
+    if (!refs.length) { status.textContent = "These searches can't be shared. Search again, then share."; announce(status.textContent); return; }
+    shareBtn.setAttribute("aria-disabled", "true");
+    try {
+      const { url } = await post("api/shares", { answers: refs });
+      shareUrl.value = url;
+      shareBox.hidden = false;
+      shareUrl.select();
+      const copied = await copyText(url);
+      announce(copied ? "Link copied. Paste it anywhere to share these searches." : "Link ready. Copy it from the box below the search.");
+      shareBtn.textContent = copied ? "Link copied" : "Share";
+      setTimeout(() => { shareBtn.textContent = "Share"; }, 2500);
+    } catch (error) {
+      status.textContent = error.message;
+      announce(error.message);
+    } finally {
+      shareBtn.removeAttribute("aria-disabled");
+    }
+  }
+  const copyText = async (text) => {
+    try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+  };
+  shareBtn.addEventListener("click", shareConversation);
+  document.getElementById("btn-share-copy").addEventListener("click", async () => {
+    shareUrl.select();
+    announce((await copyText(shareUrl.value)) ? "Link copied." : "Couldn't copy: select the link and copy it yourself.");
+  });
+
+  // A shared link (/s/<id>): show its searches as they were, ready to refine or start over.
+  async function openShared(id) {
+    setBusy(true);
+    status.textContent = "Opening the shared search...";
+    try {
+      const response = await fetch(`api/shares/${encodeURIComponent(id)}`);
+      const snapshot = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(snapshot.error || `Request failed (${response.status})`);
+      const at = new Date(snapshot.created * 1000);
+      await smoothly(() => document.body.classList.add("is-session"));
+      const when = at.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+      thread.append(el("p", "shared-banner", `Shared search from ${when}. Packs added to TONE3000 since then aren't included. Refine it below, or start over for your own search.`));
+      snapshot.turns.forEach((item, index) => {
+        const data = { ...item.data, share_ref: `${id}/${index}` };
+        if (item.kind === "filters") { logged({ kind: "filters", at, data }); renderResults(data); return; }
+        const turn = startTurn(item.prompt);
+        recordSearch(item.prompt, data, at);
+        renderBrief(turn, data);
+        renderResults(data);
+      });
+      shareBox.hidden = true;
+      document.title = `${(state.log.find((e) => e.prompt) || {}).prompt?.slice(0, 60) || "Shared search"} – TONE Search`;
+      label.textContent = "Refine the search (e.g. more gain, darker, a different era, a cheaper amp)";
+      promptEl.placeholder = "e.g. a bit more gain for solos";
+      resetBtn.hidden = false;
+      thread.scrollIntoView({ behavior: motion(), block: "start" });
+      announce(`Shared search opened. ${status.textContent}`);
+    } catch (error) {
+      status.textContent = error.message;
+      announce(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (document.body.dataset.share) openShared(document.body.dataset.share);
+
   searchBtn.addEventListener("click", () => (!promptEl.value.trim() && state.plan ? applyFilters() : search()));
   promptEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); search(); } });
   resetBtn.addEventListener("click", () => {
     state.history = []; state.goal = ""; state.plan = null; filters.markApplied();
-    state.log = []; state.packChats = new Map(); exportBtn.hidden = true;
+    state.log = []; state.packChats = new Map(); exportBtn.hidden = true; shareBtn.hidden = true; shareBox.hidden = true;
+    if (location.pathname.includes("/s/")) history.replaceState(null, "", document.baseURI); // no longer the shared page
     thread.replaceChildren(); grid.replaceChildren(); grid.hidden = true; resultsBar.hidden = true; state.results = [];
     status.textContent = ""; resetBtn.hidden = true;
     smoothly(() => document.body.classList.remove("is-session"));
@@ -1156,7 +1238,7 @@
       document.getElementById("btn-settings").click();
     });
     document.getElementById("btn-about").addEventListener("click", () => dialog.showModal());
-    if (!seen() && !hasStoredKeys()) dialog.showModal();
+    if (!seen() && !hasStoredKeys() && !document.body.dataset.share) dialog.showModal(); // a shared link shows its results first
   }
   // Visitors who already saved their own keys have clearly been here before.
   function hasStoredKeys() {

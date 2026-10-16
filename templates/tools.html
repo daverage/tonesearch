@@ -16,17 +16,13 @@
 <body class="tools-page">
   <a class="skip-link" href="#tool-file">Skip to the file tools</a>
   <div class="page">
+    {% set tab = "tools" %}{% include "_tabs.html" %}
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM tools</div>
-        <a href="./" class="btn btn-secondary btn-small">&larr; TONE Search</a>
       </div>
       <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> File tools</h1>
       <p class="intro">See what's inside a NAM capture, check that it loads and plays in Neural Amp Modeler's engine, and change its output volume or its name and credits. Everything happens in your browser: the file is never uploaded.</p>
-      <nav class="tool-nav" aria-label="NAM tools">
-        <a href="tools" aria-current="page">File tools</a>
-        <a href="cab">Cab embed</a>
-      </nav>
     </header>
 
     <main id="main" class="tool-main">

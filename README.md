@@ -196,8 +196,9 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
    - make, tags, creator
    - calibrated/verified only
 5. **Export** saves the whole conversation, with the ranked packs, as a Markdown file. Your keys are never included.
+   **Share** makes a link (`/s/<id>`) that shows your searches, briefs and ranked packs as they are now. Whoever opens it can refine from there or share again. Searches can be shared for 3 days after you make them, and links don't expire. Questions about packs and your keys aren't included.
 6. **Rate it.** Say whether the brief was right and mark packs **Good match** or **Not this**: it improves results for everyone.
-7. **NAM tools** (top of the page): [File tools](#file-tools) and [Cab embed](#cab-embed), for working on capture files.
+7. **Tabs** along the top of every page: Tone search, [File tools](#file-tools) and [Cab embed](#cab-embed).
 8. **Use it from your assistant:** Settings → **Use TONE Search from your AI assistant (MCP)** has ready-to-copy setup for Claude, ChatGPT, Cursor and others, on this site or installed yourself. See [the MCP section](#use-it-from-your-ai-assistant-mcp).
 
 **Keyboard and accessibility:**
@@ -365,7 +366,7 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 
 ## File tools
 
-`/tools` (linked as **NAM tools** at the top of the main page) works on one `.nam` file entirely in the browser; the file is never uploaded. The logic is `static/nam-edit.js`, ported from NAM Mixer's NAM tools and tested with `node --test tests/js/*.test.mjs`.
+`/tools` (the **File tools** tab) works on one `.nam` file entirely in the browser; the file is never uploaded. The logic is `static/nam-edit.js`, ported from NAM Mixer's NAM tools and tested with `node --test tests/js/*.test.mjs`.
 
 - **What's in it:** name, credits, gear and tone type, format (A1, A2 with its Full and Lite sizes, LSTM, Sequential stages), sample rate, size, how far back it looks (receptive field), the trainer's loudness, calibration levels, and whether it includes a cab.
 - **NAMCore check:** loads the file in NeuralAmpModelerCore (the wasm engine) and plays a fixed test signal through it, both sizes of an A2 file, and reports whether it plays, is silent or produces invalid numbers, or the engine's own error if it won't load.
@@ -375,7 +376,7 @@ Web research is saved in a research library (`data/knowledge.sqlite3`): the cite
 
 ## Cab embed
 
-`/cab` (linked from **NAM tools**) bakes a cabinet IR into an amp capture, so one `.nam` file plays the amp and the cab together in any NAM player that loads A2 captures, with no IR loader.
+`/cab` (the **Cab embed** tab) bakes a cabinet IR into an amp capture, so one `.nam` file plays the amp and the cab together in any NAM player that loads A2 captures, with no IR loader.
 
 1. **Choose files.** An amp capture (A1 WaveNet or A2, 48 kHz, without a cab) and a cabinet IR (`.wav`, up to 5 seconds). The page reads them in the browser and says what it found, including when a capture's metadata says it already has a cab, or when the IR is longer than an A2 model can hear.
 2. **Listen.** The page plays a DI recording, or live input from an audio interface, through the capture and the IR, using [neural-amp-modeler-wasm](https://github.com/tone-3000/neural-amp-modeler-wasm) (NeuralAmpModelerCore compiled to WebAssembly by TONE3000, copied into `static/vendor/nam-wasm/`). Nothing is uploaded. The IR is prepared the way training prepares it (mono average, leading silence trimmed at -40 dB, 48 kHz) and scaled to unit energy for listening, since many IRs add 15 to 20 dB. No DI clips are bundled: visitors use their own.
@@ -452,8 +453,8 @@ Run it with the app's environment, so it uses the same AI settings and data fold
 
 ```bash
 python3 scripts/reset_data.py                 # row counts; changes nothing
-python3 scripts/reset_data.py --all --yes     # research, saved answers, votes, activity and rate limits
-python3 scripts/reset_data.py --votes --yes   # one part: --library, --answers, --votes, --activity or --limits
+python3 scripts/reset_data.py --all --yes     # research, saved answers, votes, activity, rate limits and share links
+python3 scripts/reset_data.py --votes --yes   # one part: --library, --answers, --votes, --activity, --limits or --shares
 ```
 
 It deletes rows, so the app can keep running. Run it with the app's environment (on cPanel, from the app's virtual environment in the app folder) so it finds the same `TONESEARCH_DATA_DIR`. By hand: stop the app, delete `knowledge.sqlite3` and `limits.sqlite3` from the data folder, and start it again; both are recreated empty.

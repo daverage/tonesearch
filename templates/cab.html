@@ -17,17 +17,13 @@
 <body class="cab-page">
   <a class="skip-link" href="#cab-files">Skip to the cab embed tool</a>
   <div class="page">
+    {% set tab = "cab" %}{% include "_tabs.html" %}
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM tools</div>
-        <a href="./" class="btn btn-secondary btn-small">&larr; TONE Search</a>
       </div>
       <h1 class="brand"><img src="static/icon.svg" alt="" width="36" height="36"> Cab embed</h1>
       <p class="intro">Bake a cabinet IR into an amp capture, so one NAM file plays the amp and the cab together in any player that loads A2 captures. Listen to the pair in your browser first, then train the new file on your own free <a href="https://www.kaggle.com/" target="_blank" rel="noopener">Kaggle</a> account.</p>
-      <nav class="tool-nav" aria-label="NAM tools">
-        <a href="tools">File tools</a>
-        <a href="cab" aria-current="page">Cab embed</a>
-      </nav>
     </header>
 
     <main id="main" class="tool-main">
