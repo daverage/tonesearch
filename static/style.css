@@ -386,10 +386,10 @@ a:hover { text-decoration-thickness: 2px; }
 .model-id { font-size: 0.8rem; overflow-wrap: anywhere; }
 .model-note { margin: 0.3rem 0 0.15rem; line-height: 1.4; }
 .model-cost { margin: 0; font-size: 0.8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-/* Narrow screens: "How it works" and Settings stay together on one row under the eyebrow */
+/* Narrow screens: History, "How it works" and Settings stay together on one row under the eyebrow */
 @media (max-width: 480px) {
   .masthead-top .eyebrow { flex-basis: 100%; }
-  .masthead-top #btn-about { margin-left: auto; }
+  .masthead-top #btn-history { margin-left: auto; }
 }
 
 /* Clear all: confirm before deleting saved keys */
@@ -564,3 +564,15 @@ a:hover { text-decoration-thickness: 2px; }
 .share-box .filter-help { margin: 0.4rem 0 0; }
 .shared-banner { margin: 0 0 1rem; padding: 0.6rem 0.85rem; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel); font-size: 0.9rem; }
 @media (max-width: 480px) { .share-row { flex-wrap: wrap; } .share-row .btn { flex: 1 1 100%; } }
+
+/* Search history dialog (kept in the browser; setupHistory in app.js) */
+.history-list { display: grid; gap: 0.4rem; margin: 0 0 1rem; padding: 0; list-style: none; max-height: min(60vh, 28rem); overflow-y: auto; }
+.history-item { display: flex; align-items: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-alt); }
+.history-open { flex: 1; min-width: 0; display: grid; gap: 0.1rem; padding: 0.55rem 0.7rem; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.history-open:hover .history-title { color: var(--accent); }
+.history-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.history-title { font-weight: 600; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { font-size: 0.8rem; color: var(--text-muted); }
+.history-remove { flex: none; margin-right: 0.7rem; font-size: 0.82rem; min-height: 24px; }
+.history-empty { margin: 0 0 1rem; color: var(--text-muted); font-size: 0.9rem; }
+@media (forced-colors: active) { .history-item { border: 1px solid CanvasText; } }

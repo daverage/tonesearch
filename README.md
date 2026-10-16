@@ -196,6 +196,7 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
    - make, tags, creator
    - calibrated/verified only
 5. **Export** saves the whole conversation, with the ranked packs, as a Markdown file. Your keys are never included.
+   **History** (top of the page) lists your earlier searches, kept only in this browser with their answers, so reopening one is instant and costs no searches. Remove one, or clear them all. Up to 25 are kept.
    **Share** makes a link (`/s/<id>`) that shows your searches, briefs and ranked packs as they are now. Whoever opens it can refine from there or share again. Searches can be shared for 3 days after you make them, and links don't expire. Questions about packs and your keys aren't included.
 6. **Rate it.** Say whether the brief was right and mark packs **Good match** or **Not this**: it improves results for everyone.
 7. **Tabs** along the top of every page: Tone search, [File tools](#file-tools) and [Cab embed](#cab-embed).

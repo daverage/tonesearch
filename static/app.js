@@ -106,6 +106,7 @@
   setupSettings();
   const filters = setupFilters();
   setupWelcome();
+  const searchHistory = setupHistory();
 
   // Google ads, for every visitor. Not on a local run: that is the owner's own machine.
   // With a slot ID: one responsive banner above the footer (a manual ad unit). Without one: Auto ads.
@@ -754,6 +755,7 @@
     state.log.push(entry);
     exportBtn.hidden = false; shareBtn.hidden = false;
     shareBox.hidden = true; // a link made earlier doesn't include this
+    if (!state.replaying) searchHistory.save();
   }
 
   // A saved answer looked wrong or stale: drop that turn and work the same request out from scratch.
@@ -761,6 +763,7 @@
     if (state.busy) return;
     const entry = state.log.findIndex((item) => item.data === data);
     if (entry >= 0) state.log.splice(entry, 1);
+    searchHistory.save();
     state.history = state.history.slice(0, -2); // a saved answer is only ever the first search
     if (!state.history.length) { state.goal = ""; state.plan = null; }
     turn.remove();
@@ -960,7 +963,36 @@
     announce((await copyText(shareUrl.value)) ? "Link copied." : "Couldn't copy: select the link and copy it yourself.");
   });
 
-  // A shared link (/s/<id>): show its searches as they were, ready to refine or start over.
+  // Shows saved turns as they were, from a share link or this browser's history, ready to refine or start over.
+  // Each turn is { kind: "search" | "filters", prompt, data }, plus `at` (ms) from history.
+  async function replay(turns, { banner, at, ref = () => null }) {
+    await smoothly(() => document.body.classList.add("is-session"));
+    thread.append(el("p", "shared-banner", banner));
+    state.replaying = true; // what's replayed is saved already, or saved once by the caller
+    try {
+      turns.forEach((item, index) => {
+        const when = item.at ? new Date(item.at) : at;
+        const data = ref(index) ? { ...item.data, share_ref: ref(index) } : item.data;
+        if (item.kind === "filters") { logged({ kind: "filters", at: when, data }); renderResults(data); return; }
+        const turn = startTurn(item.prompt);
+        recordSearch(item.prompt, data, when);
+        renderBrief(turn, data);
+        renderResults(data);
+      });
+    } finally {
+      state.replaying = false;
+    }
+    shareBox.hidden = true;
+    document.title = `${(state.log.find((e) => e.prompt) || {}).prompt?.slice(0, 60) || "Saved search"} – TONE Search`;
+    label.textContent = "Refine the search (e.g. more gain, darker, a different era, a cheaper amp)";
+    promptEl.placeholder = "e.g. a bit more gain for solos";
+    resetBtn.hidden = false;
+    thread.scrollIntoView({ behavior: motion(), block: "start" });
+  }
+
+  const dateOf = (at) => at.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+
+  // A shared link (/s/<id>): show its searches as they were.
   async function openShared(id) {
     setBusy(true);
     status.textContent = "Opening the shared search...";
@@ -969,23 +1001,12 @@
       const snapshot = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(snapshot.error || `Request failed (${response.status})`);
       const at = new Date(snapshot.created * 1000);
-      await smoothly(() => document.body.classList.add("is-session"));
-      const when = at.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
-      thread.append(el("p", "shared-banner", `Shared search from ${when}. Packs added to TONE3000 since then aren't included. Refine it below, or start over for your own search.`));
-      snapshot.turns.forEach((item, index) => {
-        const data = { ...item.data, share_ref: `${id}/${index}` };
-        if (item.kind === "filters") { logged({ kind: "filters", at, data }); renderResults(data); return; }
-        const turn = startTurn(item.prompt);
-        recordSearch(item.prompt, data, at);
-        renderBrief(turn, data);
-        renderResults(data);
+      state.sessionId = `share-${id}`; // one history entry per link, however often it's opened
+      await replay(snapshot.turns, {
+        at, ref: (index) => `${id}/${index}`,
+        banner: `Shared search from ${dateOf(at)}. Packs added to TONE3000 since then aren't included. Refine it below, or start over for your own search.`,
       });
-      shareBox.hidden = true;
-      document.title = `${(state.log.find((e) => e.prompt) || {}).prompt?.slice(0, 60) || "Shared search"} – TONE Search`;
-      label.textContent = "Refine the search (e.g. more gain, darker, a different era, a cheaper amp)";
-      promptEl.placeholder = "e.g. a bit more gain for solos";
-      resetBtn.hidden = false;
-      thread.scrollIntoView({ behavior: motion(), block: "start" });
+      if (!searchHistory.has(state.sessionId)) searchHistory.save(); // keeps searches made on from it
       announce(`Shared search opened. ${status.textContent}`);
     } catch (error) {
       status.textContent = error.message;
@@ -998,12 +1019,17 @@
 
   searchBtn.addEventListener("click", () => (!promptEl.value.trim() && state.plan ? applyFilters() : search()));
   promptEl.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); search(); } });
-  resetBtn.addEventListener("click", () => {
-    state.history = []; state.goal = ""; state.plan = null; filters.markApplied();
+  // Empties the conversation; history keeps it. The next search starts a new history entry.
+  function clearSession() {
+    state.history = []; state.goal = ""; state.plan = null; state.sessionId = null; filters.markApplied();
     state.log = []; state.packChats = new Map(); exportBtn.hidden = true; shareBtn.hidden = true; shareBox.hidden = true;
     if (location.pathname.includes("/s/")) history.replaceState(null, "", document.baseURI); // no longer the shared page
     thread.replaceChildren(); grid.replaceChildren(); grid.hidden = true; resultsBar.hidden = true; state.results = [];
     status.textContent = ""; resetBtn.hidden = true;
+  }
+
+  resetBtn.addEventListener("click", () => {
+    clearSession();
     smoothly(() => document.body.classList.remove("is-session"));
     document.title = "TONE Search: find NAM captures for any guitar or bass tone";
     announce("Started over.");
@@ -1011,6 +1037,92 @@
     promptEl.placeholder = "e.g. Early Stevie Ray Vaughan: fat, bright, on the edge of breakup, digs in when I pick hard";
     promptEl.focus();
   });
+
+  // Search history, kept only in this browser: each conversation with its answers, so reopening one needs no new
+  // AI calls. The oldest go first when there are too many or the browser's storage is full.
+  function setupHistory() {
+    const KEY = "tonesearch.history";
+    const MAX = 25;
+    const dialog = document.getElementById("history-dialog");
+    const list = document.getElementById("history-list");
+    const empty = document.getElementById("history-empty");
+    const clearBtn = document.getElementById("btn-history-clear");
+    const confirmBox = document.getElementById("history-clear-confirm");
+
+    const read = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+    const write = (entries) => {
+      for (let keep = entries; ; keep = keep.slice(0, -1)) {
+        try {
+          if (keep.length) localStorage.setItem(KEY, JSON.stringify(keep)); else localStorage.removeItem(KEY);
+          return;
+        } catch { if (!keep.length) return; } // storage full or unavailable: drop the oldest and try again
+      }
+    };
+
+    function save() {
+      const first = state.log.find((e) => e.kind === "search");
+      if (!first) return;
+      state.sessionId ||= `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const entry = {
+        id: state.sessionId, title: first.prompt, updated: Date.now(),
+        turns: state.log.map((e) => ({ kind: e.kind, prompt: e.prompt || "", at: +e.at, data: e.data })),
+      };
+      write([entry, ...read().filter((e) => e.id !== entry.id)].slice(0, MAX));
+    }
+
+    function render() {
+      const entries = read();
+      list.replaceChildren(...entries.map((entry) => {
+        const item = el("li", "history-item");
+        const open = el("button", "history-open");
+        open.type = "button";
+        const searches = entry.turns.filter((t) => t.kind === "search").length;
+        const refined = searches > 1 ? ` · ${searches - 1} refinement${searches === 2 ? "" : "s"}` : "";
+        const when = new Date(entry.updated).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        open.append(el("span", "history-title", entry.title), el("span", "history-meta", `${when}${refined}`));
+        open.addEventListener("click", () => reopen(entry.id));
+        const remove = el("button", "link-btn history-remove", "Remove");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `Remove "${entry.title}" from history`);
+        remove.addEventListener("click", () => {
+          write(read().filter((e) => e.id !== entry.id));
+          if (state.sessionId === entry.id) state.sessionId = null; // searching on saves it afresh
+          render();
+          (list.querySelector(".history-open") || dialog.querySelector("[data-close]")).focus();
+          announce(`Removed "${entry.title}" from history.`);
+        });
+        item.append(open, remove);
+        return item;
+      }));
+      empty.hidden = entries.length > 0;
+      clearBtn.hidden = entries.length === 0;
+      confirmBox.hidden = true;
+    }
+
+    async function reopen(id) {
+      const entry = read().find((e) => e.id === id);
+      if (!entry || state.busy) return;
+      dialog.close();
+      clearSession();
+      state.sessionId = entry.id;
+      await replay(entry.turns, {
+        at: new Date(entry.updated),
+        banner: `From your history: ${dateOf(new Date(entry.updated))}. Packs added to TONE3000 since then aren't included. Refine it below, or start over.`,
+      });
+      announce(`Reopened "${entry.title}" from your history. ${status.textContent}`);
+    }
+
+    document.getElementById("btn-history").addEventListener("click", () => { render(); dialog.showModal(); });
+    dialog.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => dialog.close()));
+    clearBtn.addEventListener("click", () => { confirmBox.hidden = false; document.getElementById("btn-history-clear-yes").focus(); });
+    document.getElementById("btn-history-clear-no").addEventListener("click", () => { confirmBox.hidden = true; clearBtn.focus(); });
+    document.getElementById("btn-history-clear-yes").addEventListener("click", () => {
+      write([]); state.sessionId = null; render();
+      dialog.querySelector("[data-close]").focus();
+      announce("Search history cleared.");
+    });
+    return { save, has: (id) => read().some((e) => e.id === id) };
+  }
 
   function setupSettings() {
     // Workers AI models suggested in Settings: [id, note, input $/1M, output $/1M, rough searches per free day].

@@ -51,6 +51,7 @@
     <header class="masthead">
       <div class="masthead-top">
         <div class="eyebrow">NAM capture discovery</div>
+        <button type="button" id="btn-history" class="link-btn btn-small-link" aria-haspopup="dialog">History</button>
         <button type="button" id="btn-about" class="link-btn btn-small-link" aria-haspopup="dialog">How it works</button>
         <button type="button" id="btn-settings" class="btn btn-secondary btn-small" aria-haspopup="dialog">Settings<span id="settings-badge" class="settings-badge" hidden> · your keys</span></button>
       </div>
@@ -212,7 +213,7 @@
         <summary>Licences, affiliation and privacy</summary>
       <p><strong>Captures belong to their creators.</strong> Every pack, file and image comes from <a href="https://www.tone3000.com/" target="_blank" rel="noopener">TONE3000</a> and is used under its creator's licence, shown on each pack. Check the licence before using a capture in your own work.</p>
       <p><strong>Not affiliated.</strong> TONE Search is an independent project. It is not affiliated with, or endorsed by, TONE3000, Neural Amp Modeler, Cloudflare, or any artist, band or gear maker mentioned. All product names, trademarks and artist names belong to their owners and are used only to describe tones.</p>
-      <p><strong>Privacy.</strong> Your searches and questions are sent to the AI provider, to TONE3000 and, with web research on, to DuckDuckGo to produce results. To apply the hourly limit, this site keeps your IP address with the time of each request for up to one hour, then deletes it. Settings and your own keys are saved only in your browser. This site shows Google ads, and Google may use cookies to serve and measure them, and to personalise them where you allow it; see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">how Google uses information from sites that use its services</a>.</p>
+      <p><strong>Privacy.</strong> Your searches and questions are sent to the AI provider, to TONE3000 and, with web research on, to DuckDuckGo to produce results. To apply the hourly limit, this site keeps your IP address with the time of each request for up to one hour, then deletes it. Settings, your own keys and your search history are saved only in your browser. This site shows Google ads, and Google may use cookies to serve and measure them, and to personalise them where you allow it; see <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noopener">how Google uses information from sites that use its services</a>.</p>
       <p>Provided as is, without warranty of any kind. Searches are limited per visitor each hour unless you add your own AI key and TONE3000 key in Settings.</p>
       </details>
       <p class="footer-copy">&copy; {{ current_year }} Andrzej Marczewski. The site and its content: all rights reserved. <a href="https://github.com/daverage/tonesearch" target="_blank" rel="noopener">Source code on GitHub</a>, free for non-commercial use under the <a href="https://polyformproject.org/licenses/noncommercial/1.0.0" target="_blank" rel="noopener">PolyForm Noncommercial License</a>.</p>
@@ -241,6 +242,25 @@
         <button type="submit" id="btn-welcome-start" class="btn btn-primary btn-small" autofocus>Start searching</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="history-dialog" class="settings history" aria-labelledby="history-title" aria-describedby="history-note">
+    <h2 id="history-title">Your search history</h2>
+    <p id="history-note" class="settings-note">Saved only in this browser, with the answers, so reopening a search is instant and uses none of your hourly searches. Nothing is sent to this site.</p>
+    <p id="history-empty" class="history-empty">No searches yet. Your searches will appear here.</p>
+    <ul id="history-list" class="history-list"></ul>
+    <div id="history-clear-confirm" class="settings-confirm" role="group" aria-labelledby="history-clear-text" hidden>
+      <p id="history-clear-text"><strong>Clear your search history?</strong> This deletes every saved search from this browser. It cannot be undone.</p>
+      <div class="settings-actions">
+        <button type="button" id="btn-history-clear-no" class="btn btn-secondary btn-small">Keep it</button>
+        <span class="spacer"></span>
+        <button type="button" id="btn-history-clear-yes" class="btn btn-danger btn-small">Yes, clear history</button>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button type="button" id="btn-history-clear" class="btn btn-secondary btn-small">Clear history</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn btn-primary btn-small" data-close>Close</button>
+    </div>
   </dialog>
   <dialog id="settings-dialog" class="settings" aria-labelledby="settings-title">
     <form id="settings-form" method="dialog" novalidate>

@@ -138,6 +138,7 @@ def test_every_page_has_the_section_tabs(client):
 def test_page_renders_with_script_root(client):
     html = client.get("/", base_url="http://localhost/tonesearch/").get_data(as_text=True)
     assert '<base href="/tonesearch/">' in html and "not configured" in html
+    assert 'id="btn-history"' in html and 'id="history-dialog"' in html  # search history lives in the browser
     assert "google-adsense-account" not in html and 'data-ad-client=""' in html  # ads are off unless configured
 
 
