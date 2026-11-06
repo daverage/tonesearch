@@ -21,6 +21,7 @@ TONE Search is a small Flask app with no build step. It runs on a laptop or on o
   - [Option B: A local model with Ollama](#option-b-a-local-model-with-ollama)
   - [Option C: Any OpenAI-compatible API](#option-c-any-openai-compatible-api)
 - [Using the app](#using-the-app)
+  - [TONE3000 downloads and the Cloudflare 1010 fix](docs/tone3000-downloads.md)
 - [Use it from your AI assistant (MCP)](#use-it-from-your-ai-assistant-mcp)
 - [Research library](#research-library)
 - [File tools](#file-tools)
@@ -92,7 +93,7 @@ The AI code (`tonesearch/ai.py`) is built to cope with a wide range of models, i
 ## What you need
 
 - **Python 3.10 or newer.**
-- **A TONE3000 API key (free):** [register for an account](https://www.tone3000.com/), then copy the **secret key** (it starts with `t3k_cs_`) from your [TONE3000 settings](https://www.tone3000.com/settings). Without it, you get the AI tone brief but no packs.
+- **TONE3000 access:** configure a secret key (`t3k_cs_…`) for catalogue searches, then connect a TONE3000 account for model downloads. This app uses OAuth for user downloads. See [TONE3000 authentication](https://www.tone3000.com/api#authentication) for the supported credential types.
 - **An AI model**, from one of these:
   - **Cloudflare Workers AI:** has a free daily allowance. Setup is slightly technical.
   - **A local model with Ollama:** free and private, but needs a reasonably capable computer.
@@ -177,7 +178,8 @@ The base URL must use `https://`. The app calls `<base URL>/chat/completions`.
 
 You can also start the app with no settings at all (`python3 app.py`) and enter your keys in the **Settings** dialog in the browser:
 
-- You can use a Cloudflare or custom provider, plus your TONE3000 key.
+- You can use a Cloudflare or custom provider and add a TONE3000 secret key for catalogue searches in Settings.
+- To download NAM files, also enter the publishable key (`t3k_pub_…`) from [TONE3000 API settings](https://www.tone3000.com/settings), select **Connect TONE3000**, then enter the displayed code at TONE3000's activation page and approve access. The app refreshes the OAuth session for you; it lasts for the current browser tab.
 - Keys entered there are saved only in that browser.
 - The page will warn that the server's own AI isn't configured. That is expected.
 
@@ -187,7 +189,7 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
 
 1. **Describe it.** Name a song, an artist or an album, or say what you hear: "glassy clean with a bit of hair", "tight modern metal rhythm".
 2. **Read the brief.** The AI sums up the tone, lists the gear, and gives tips. With **Web research** on, it checks real sources first. Web research is slower, but better for songs and artists.
-3. **Pick a capture.** Packs are ranked by fit, and weak matches are folded away. Use **Files & questions** to see a pack's NAM files, download one or all of them, or ask the AI about the pack. **Download all** zips the pack on the server, for packs of up to 60 files and 250 MB; download larger packs on TONE3000.
+3. **Pick a capture.** Packs are ranked by fit, and weak matches are folded away. Use **Files & questions** to see a pack's NAM files, download one or all of them, or ask the AI about the pack. To download, connect your TONE3000 account in Settings with its publishable key (`t3k_pub_…`); TONE Search uses the connected account’s access token for downloads. **Download all** zips the pack on the server, for packs of up to 60 files and 250 MB; download larger packs on TONE3000.
 4. **Refine** in plain words, or use **Filters**:
    - gear type
    - format (NAM, IR, AIDA-X…)
@@ -201,6 +203,8 @@ You can also start the app with no settings at all (`python3 app.py`) and enter 
 6. **Rate it.** Say whether the brief was right and mark packs **Good match** or **Not this**: it improves results for everyone.
 7. **Tabs** along the top of every page: Tone search, [File tools](#file-tools) and [Cab embed](#cab-embed).
 8. **Use it from your assistant:** Settings → **Use TONE Search from your AI assistant (MCP)** has ready-to-copy setup for Claude, ChatGPT, Cursor and others, on this site or installed yourself. See [the MCP section](#use-it-from-your-ai-assistant-mcp).
+
+For the account connection steps, credential types, and the confirmed Cloudflare User-Agent fix, see [TONE3000 downloads](docs/tone3000-downloads.md). That guide also includes code snippets for other apps.
 
 **Keyboard and accessibility:**
 
@@ -233,7 +237,7 @@ There are two ways to use it:
 Both versions need **your own** TONE3000 secret key. The server never uses the site's key.
 
 1. Sign in at [tone3000.com](https://www.tone3000.com) and open your account's API settings.
-2. Create a **secret** key. It starts with `t3k_cs_`. Keys starting `t3k_pk_` (publishable keys) won't work.
+2. Create a **secret** key. It starts with `t3k_cs_`. Publishable keys (`t3k_pub_…`, the OAuth client ID) do not authenticate this MCP endpoint.
 3. Keep it private. You can delete it and make a new one at any time.
 
 ### Step 2a: hosted (quickest)
@@ -464,7 +468,7 @@ It deletes rows, so the app can keep running. Run it with the app's environment 
 
 ## Configuration reference
 
-All settings are environment variables.
+The server configuration below uses environment variables. Browser Settings and the TONE3000 account connection are described in [the download workflow](docs/tone3000-downloads.md).
 
 ### AI provider
 
@@ -661,6 +665,8 @@ scripts/                Eval scripts, their saved research notes, and reset_data
 |---|---|
 | "The AI provider is not configured on this server yet" | The AI environment variables didn't reach the app. Put them on the same command as `python3 app.py`, or `export` them first. |
 | A tone brief but no packs, with a TONE3000 warning | No TONE3000 key. Set `TONE3000_API_KEY`, or add your key in Settings. |
+| Download error includes `error code: 1010` | Cloudflare rejected the HTTP client signature. The server must send a descriptive application User-Agent (`ToneSearch/1.0`), rather than Python urllib's default. Update and restart the app. If it persists, send TONE3000 support the timestamp and Cloudflare Ray ID from `data/download-errors/latest.json`. See [Cloudflare error 1010](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1010/). |
+| A NAM download returns 503 with an upstream HTTP 403 or 404 | Downloads need the connected user's OAuth token for both model lookup and file retrieval. Add the publishable key in Settings and connect your TONE3000 account. If already connected, update and restart the app, then report the provider response included in the error. HTTP 403 can come from authorization or a file-host browser challenge; HTTP 404 can indicate an incorrect download URL. These need the upstream response to diagnose. |
 | "… was still thinking after N seconds" | A thinking model took too long. Try again, choose a faster model, or raise the time budget if you are not behind Cloudflare. |
 | "The model used its whole token budget thinking" | Raise **Max tokens** (Settings → AI tuning or `NAM_MIXER_AI_MAX_TOKENS`), or choose a model that doesn't think. |
 | "Settings: the AI base URL must be a public internet address" | A visitor-entered URL can't point at `127.0.0.1` or a private network. To use a local model, run the app yourself with `NAM_MIXER_AI_PROVIDER=local`. |

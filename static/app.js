@@ -73,6 +73,8 @@
   const motion = () => (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth");
   // Visitor's own keys (Settings): kept in this browser only, sent as headers on each request.
   const SETTINGS_KEY = "tonesearch.settings";
+  const T3K_AUTH_KEY = "tonesearch.tone3000.oauth";
+  let t3kAuthMemory = {};
   const loadSettings = () => {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { return {}; }
   };
@@ -103,6 +105,57 @@
     if (settings.tone3000_api_key) headers["X-TONE3000-Key"] = settings.tone3000_api_key;
     return headers;
   };
+  const readT3kAuth = () => {
+    try { return JSON.parse(sessionStorage.getItem(T3K_AUTH_KEY)) || t3kAuthMemory; } catch { return t3kAuthMemory; }
+  };
+  const saveT3kAuth = (auth) => {
+    t3kAuthMemory = auth;
+    try { sessionStorage.setItem(T3K_AUTH_KEY, JSON.stringify(auth)); } catch { /* keep it in memory until this tab closes */ }
+  };
+  const clearT3kAuth = () => {
+    t3kAuthMemory = {};
+    try { sessionStorage.removeItem(T3K_AUTH_KEY); } catch { /* unavailable in private mode */ }
+  };
+  let t3kRefreshRequest = null;
+  const t3kTokenRequest = async (body) => {
+    const response = await fetch("https://www.tone3000.com/api/v1/oauth/token", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(result.error_description || result.error || `TONE3000 token request failed (${response.status})`);
+      error.code = result.error;
+      throw error;
+    }
+    return result;
+  };
+  const tone3000AccessToken = async () => {
+    const auth = readT3kAuth();
+    const clientId = settings.tone3000_client_id || "";
+    if (!clientId) throw new Error("Add your TONE3000 publishable key and connect your account in Settings to download NAM files.");
+    if (auth.access_token && auth.client_id === clientId && auth.expires_at > Date.now() + 60_000) return auth.access_token;
+    if (!auth.refresh_token || auth.client_id !== clientId) throw new Error("Connect your TONE3000 account in Settings to download NAM files.");
+    if (t3kRefreshRequest) return t3kRefreshRequest;
+    t3kRefreshRequest = (async () => {
+      try {
+        const next = await t3kTokenRequest({ grant_type: "refresh_token", refresh_token: auth.refresh_token, client_id: clientId });
+        saveT3kAuth({ ...next, client_id: clientId, expires_at: Date.now() + Number(next.expires_in || 0) * 1000 });
+        return next.access_token;
+      } catch (error) {
+        if (error.code === "invalid_grant") {
+          clearT3kAuth();
+          throw new Error("TONE3000 authorization expired. Reconnect in Settings.");
+        }
+        throw new Error(`Could not refresh TONE3000 authorization. Try again. (${error.message})`);
+      } finally {
+        t3kRefreshRequest = null;
+      }
+    })();
+    try {
+      return await t3kRefreshRequest;
+    } finally { t3kRefreshRequest = null; }
+  };
+  const downloadHeaders = async () => ({ ...settingsHeaders(), "X-TONE3000-Access-Token": await tone3000AccessToken() });
   setupSettings();
   const filters = setupFilters();
   setupWelcome();
@@ -512,12 +565,12 @@
     }
   }
 
-  // Fetched rather than linked so the visitor's TONE3000 key header goes with it.
+  // Fetched rather than linked so the visitor's short-lived TONE3000 OAuth token can authorize the file request.
   async function downloadModel(pack, model, button, row) {
     button.disabled = true;
     row.querySelector(".t3ai-warning")?.remove();
     try {
-      const response = await fetch(`api/packs/${encodeURIComponent(pack.id)}/models/${encodeURIComponent(model.id)}/download?architecture=${packArchitecture()}`, { headers: settingsHeaders() });
+      const response = await fetch(`api/packs/${encodeURIComponent(pack.id)}/models/${encodeURIComponent(model.id)}/download?architecture=${packArchitecture()}`, { headers: await downloadHeaders() });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Download failed (${response.status})`);
@@ -553,7 +606,7 @@
     column.querySelector(":scope > .t3ai-warning")?.remove();
     try {
       button.textContent = "Preparing...";
-      const response = await fetch(`api/packs/${encodeURIComponent(pack.id)}/download?architecture=${packArchitecture()}`, { headers: settingsHeaders() });
+      const response = await fetch(`api/packs/${encodeURIComponent(pack.id)}/download?architecture=${packArchitecture()}`, { headers: await downloadHeaders() });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || `Download failed (${response.status})`);
@@ -1185,6 +1238,7 @@
       clearInvalid();
       showProvider();
       showLimit(settings);
+      updateAuthStatus();
     };
     const collect = () => {
       const next = { provider: providerEl.value };
@@ -1245,6 +1299,86 @@
     openBtn.addEventListener("click", () => { fill(); openDialog(); });
     document.getElementById("btn-settings-cancel").addEventListener("click", closeDialog);
 
+    const clientIdField = form.elements.tone3000_client_id;
+    const connectButton = document.getElementById("t3k-connect");
+    const authStatus = document.getElementById("t3k-auth-status");
+    const deviceBox = document.getElementById("t3k-device-authorization");
+    const deviceCode = document.getElementById("t3k-device-code");
+    const verifyLink = document.getElementById("t3k-verify-link");
+    let authAttempt = 0;
+    const updateAuthStatus = () => {
+      const auth = readT3kAuth();
+      authStatus.textContent = auth.refresh_token && auth.client_id === clientIdField.value.trim()
+        ? "TONE3000 account connected" : "Not connected";
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    clientIdField.addEventListener("input", updateAuthStatus);
+    document.getElementById("t3k-cancel-connect").addEventListener("click", () => {
+      authAttempt += 1;
+      deviceBox.hidden = true;
+      connectButton.disabled = false;
+      authStatus.textContent = "Authorization cancelled";
+    });
+    connectButton.addEventListener("click", async () => {
+      const clientId = clientIdField.value.trim();
+      if (!clientId) {
+        authStatus.textContent = "Enter your TONE3000 publishable key first.";
+        clientIdField.focus();
+        return;
+      }
+      settings = { ...settings, tone3000_client_id: clientId };
+      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* keep in this page */ }
+      const attempt = ++authAttempt;
+      connectButton.disabled = true;
+      authStatus.textContent = "Starting TONE3000 authorization…";
+      deviceBox.hidden = true;
+      try {
+        const response = await fetch("https://www.tone3000.com/api/v1/oauth/device_authorization", {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: clientId, scope: "read" }),
+        });
+        const device = await response.json().catch(() => ({}));
+        if (attempt !== authAttempt) return;
+        if (!response.ok) throw new Error(device.error_description || device.error || `TONE3000 authorization failed (${response.status})`);
+        if (!device.device_code || !device.user_code) throw new Error("TONE3000 returned an incomplete device authorization response.");
+        deviceCode.textContent = device.user_code;
+        const activation = device.verification_uri_complete || device.verification_uri || "https://www.tone3000.com/activate";
+        const parsedActivation = new URL(activation);
+        verifyLink.href = parsedActivation.hostname === "www.tone3000.com" || parsedActivation.hostname.endsWith(".tone3000.com")
+          ? activation : "https://www.tone3000.com/activate";
+        deviceBox.hidden = false;
+        authStatus.textContent = "Authorize TONE Search on TONE3000; waiting for approval…";
+        let interval = Math.max(1, Number(device.interval) || 5);
+        const deadline = Date.now() + Math.max(1, Number(device.expires_in) || 600) * 1000;
+        while (attempt === authAttempt && Date.now() < deadline) {
+          await wait(interval * 1000);
+          if (attempt !== authAttempt) break;
+          try {
+            const tokens = await t3kTokenRequest({
+              grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: device.device_code, client_id: clientId,
+            });
+            if (attempt !== authAttempt) break;
+            saveT3kAuth({ ...tokens, client_id: clientId, expires_at: Date.now() + Number(tokens.expires_in || 0) * 1000 });
+            deviceBox.hidden = true;
+            authStatus.textContent = "TONE3000 account connected. NAM downloads are ready.";
+            break;
+          } catch (error) {
+            if (error.code === "authorization_pending") continue;
+            if (error.code === "slow_down") { interval += 5; continue; }
+            if (error.code === "access_denied") throw new Error("TONE3000 authorization was declined.");
+            if (error.code === "expired_token") throw new Error("The TONE3000 authorization code expired. Connect again.");
+            throw error;
+          }
+        }
+        if (attempt === authAttempt && Date.now() >= deadline) throw new Error("The TONE3000 authorization code expired. Connect again.");
+      } catch (error) {
+        if (attempt === authAttempt) authStatus.textContent = error.message;
+      } finally {
+        if (attempt === authAttempt) connectButton.disabled = false;
+      }
+    });
+    updateAuthStatus();
+
     // MCP setup: the snippets show this site's own address and the visitor's TONE3000 key as typed above (saved or
     // not), so they can be pasted as they are. The key never leaves the page; it's only put into the text.
     const mcp = document.getElementById("mcp-setup");
@@ -1304,6 +1438,7 @@
     document.getElementById("btn-clear-keep").addEventListener("click", () => askToClear(false));
     document.getElementById("btn-clear-yes").addEventListener("click", () => {
       save({});
+      clearT3kAuth();
       try { localStorage.removeItem(SETTINGS_KEY); } catch { /* ignore */ }
       fill();
       askToClear(false);

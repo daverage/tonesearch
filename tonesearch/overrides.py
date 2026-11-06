@@ -13,6 +13,7 @@ HEADERS = {
     "model": "X-AI-Model",
     "api_key": "X-AI-Key",
     "tone3000_api_key": "X-TONE3000-Key",
+    "tone3000_access_token": "X-TONE3000-Access-Token",
     # AI tuning, honoured only with the visitor's own AI provider (see ai._visitor_config).
     "max_tokens": "X-AI-Max-Tokens",
     "temperature": "X-AI-Temperature",
@@ -33,7 +34,7 @@ def from_headers(headers) -> dict:
     for name, header in HEADERS.items():
         value = (headers.get(header) or "").strip()
         if value:
-            values[name] = value[:MAX_LENGTH]
+            values[name] = value[:8192 if name == "tone3000_access_token" else MAX_LENGTH]
     return values
 
 

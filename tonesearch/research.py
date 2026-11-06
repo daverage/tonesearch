@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import gzip
 import ipaddress
 import json
 import logging
@@ -11,11 +12,13 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
 import zipfile
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from urllib.error import HTTPError
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from tonesearch import cache, overrides
@@ -26,6 +29,7 @@ def _env(name: str) -> str:
 
 
 TONE3000_BASE = "https://www.tone3000.com/api/v1"
+TONE3000_USER_AGENT = "ToneSearch/1.0 (TONE3000 API client)"
 
 _METADATA_STOPWORDS = frozenset({
     # Domain filler: generic enough to appear in almost any amp listing or
@@ -816,7 +820,8 @@ def _require_tone3000_api_key(*, for_action: str) -> str:
 def _tone3000_get(path: str, params: dict | None, api_key: str, *, opener, timeout: int, failure: str) -> object:
     """A TONE3000 API reply as JSON. Any failure raises RuntimeError("<failure>: <reason>")."""
     url = f"{TONE3000_BASE}/{path}" + (f"?{urlencode(params)}" if params else "")
-    request = Request(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+    request = Request(url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+                                    "User-Agent": TONE3000_USER_AGENT})
     try:
         with opener(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -987,14 +992,14 @@ def _models_params(tone_id: int, architecture: str, page: int) -> dict:
     return params
 
 
-def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", opener=urlopen) -> list[dict]:
+def _tone3000_models_payload(tone_id: int, *, architecture: str = "2", access_token: str = "", opener=urlopen) -> list[dict]:
     """Every A2 model in a pack: the API pages its results, so keep asking until a short page."""
-    api_key = _require_tone3000_api_key(for_action="downloads")
+    bearer = access_token or _require_tone3000_api_key(for_action="downloads")
     models: list[dict] = []
     page = 1
     while len(models) < MAX_MODELS:
         try:
-            payload = _tone3000_get("models", _models_params(tone_id, architecture, page), api_key, opener=opener,
+            payload = _tone3000_get("models", _models_params(tone_id, architecture, page), bearer, opener=opener,
                                     timeout=20, failure="TONE3000 pack details failed")
         except RuntimeError:
             if models:  # keep what we have rather than failing the whole pack on a later page
@@ -1037,21 +1042,124 @@ def _tone3000_model_names(tone_id: int, architecture: str, opener) -> list[dict]
 MAX_FILE_BYTES = 50_000_000
 
 
-def _fetch_file(url: str, api_key: str, opener=None) -> bytes:
-    """Download one capture file without ever sending the API key off TONE3000.
+def _decode_download_error_body(body: bytes, headers) -> str:
+    if headers.get("Content-Encoding", "").lower() == "gzip":
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(body)) as stream:
+                body = stream.read(1_048_577)
+        except (OSError, EOFError):
+            pass
+    return body.decode("utf-8", errors="replace")
 
-    TONE3000 API links get the key; anything else (for example a signed storage link, or where an API
-    link redirects to) is fetched without it, and only from a public https host. Redirects are followed
-    by hand so urllib cannot forward the Authorization header to another host.
+
+def _dump_download_error(error: HTTPError, access_token: str, body: bytes) -> Path:
+    """Save the complete bounded upstream error locally, excluding credentials."""
+    def scrub(text):
+        for secret in (access_token, overrides.get("tone3000_api_key"), _env("TONE3000_API_KEY")):
+            if secret:
+                text = text.replace(secret, "[credential omitted]")
+        for _, value in parse_qsl(urlparse(error.url).query):
+            if value:
+                text = text.replace(value, "[URL value omitted]")
+        text = re.sub(r"t3k_[\w.-]+", "[credential omitted]", text)
+        return re.sub(r"([?&][\w-]+=)[^&\s\"<>]+", r"\1[omitted]", text)
+
+    def scrub_json(value):
+        if isinstance(value, dict):
+            return {key: "[credential omitted]" if re.search(
+                r"token|secret|password|cookie|authorization|verify|signature|api.?key", key, re.IGNORECASE
+            ) else scrub_json(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [scrub_json(item) for item in value]
+        return scrub(value) if isinstance(value, str) else value
+
+    decoded = _decode_download_error_body(body, error.headers)
+    try:
+        decoded = json.dumps(scrub_json(json.loads(decoded)), ensure_ascii=True, indent=2)
+    except (ValueError, TypeError):
+        decoded = scrub(decoded)
+    record = {
+        "captured_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "url": scrub(error.url), "status": error.code, "reason": scrub(str(error.reason)),
+        "oauth_authorization_present": bool(access_token),
+        "response_headers": {key: "[credential omitted]" if re.search(
+            r"cookie|authorization|token|secret", key, re.IGNORECASE
+        ) else scrub(value) for key, value in error.headers.items()},
+        "raw_body_bytes_captured": len(body), "capture_limit_bytes": 1_048_576,
+        "body_truncated": len(body) > 1_048_576, "body_text": decoded,
+    }
+    folder = Path(_env("TONESEARCH_DATA_DIR") or Path(__file__).resolve().parent.parent / "data") / "download-errors"
+    folder.mkdir(parents=True, exist_ok=True)
+    destination = folder / "latest.json"
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder, delete=False) as output:
+        json.dump(record, output, indent=2, ensure_ascii=True)
+        temporary = output.name
+    os.replace(temporary, destination)
+    return destination.resolve()
+
+
+def _download_failure_reason(error: HTTPError, access_token: str, raw_body: bytes | None = None) -> str:
+    """Bounded provider diagnostics; never include credentials or signed download URLs."""
+    body = _decode_download_error_body(error.read(8192) if raw_body is None else raw_body, error.headers)
+    reason = ""
+    try:
+        payload = json.loads(body)
+        def redact(value):
+            if isinstance(value, dict):
+                return {key: "[credential omitted]" if re.search(
+                    r"token|secret|password|cookie|authorization|verify|signature|api.?key", key, re.IGNORECASE
+                ) else redact(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [redact(item) for item in value[:10]]
+            return value
+        reason = json.dumps(redact(payload), ensure_ascii=True)
+    except (ValueError, TypeError):
+        if re.fullmatch(r"\s*error code:\s*\d+\s*", body, re.IGNORECASE):
+            reason = body.strip()
+        storage_errors = re.findall(r"<(?:Code|Message)>([^<]*)</(?:Code|Message)>", body)
+        if storage_errors:
+            reason = "; ".join(storage_errors)
+        else:
+            title = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+            if title:
+                reason = re.sub(r"<[^>]+>", "", title.group(1))
+    if error.headers.get("CF-Mitigated") == "challenge":
+        reason = "Cloudflare browser challenge" + (f": {reason}" if reason else "")
+    metadata = []
+    for key in ("Server", "Content-Type", "WWW-Authenticate", "X-Cache", "X-Amz-Error-Code", "CF-Ray"):
+        if value := error.headers.get(key):
+            metadata.append(f"{key}: {value[:160]}")
+    if metadata:
+        reason += " [" + "; ".join(metadata) + "]"
+    if access_token:
+        reason = reason.replace(access_token, "[credential omitted]")
+    for _, value in parse_qsl(urlparse(error.url).query):
+        if value:
+            reason = reason.replace(value, "[URL value omitted]")
+    reason = re.sub(r"t3k_[\w.-]+", "[credential omitted]", reason)
+    reason = re.sub(r"https?://\S+", "[URL omitted]", reason)
+    return " ".join(reason.split())[:700]
+
+
+def _fetch_file(url: str, access_token: str, opener=None) -> bytes:
+    """Download one model with the user's OAuth token only on TONE3000-owned hosts.
+
+    Use the model URL returned for the connected user. Redirects to signed storage links are fetched without the token; redirects are
+    followed by hand so urllib cannot forward the Authorization header to another host.
     """
     for _ in range(3):
         parsed = urlparse(url)
-        if url.startswith(f"{TONE3000_BASE}/"):
-            headers = {"Authorization": f"Bearer {api_key}"}
+        host = (parsed.hostname or "").lower()
+        tone3000_host = host == "tone3000.com" or host.endswith(".tone3000.com")
+        if parsed.scheme == "https" and tone3000_host:
+            if not access_token:
+                raise RuntimeError("Connect your TONE3000 account in Settings before downloading NAM files.")
+            headers = {"Authorization": f"Bearer {access_token}"}
         elif parsed.scheme == "https" and _is_safe_public_host(parsed.hostname or ""):
             headers = {}
         else:
             raise RuntimeError(f"TONE3000 gave a download link on an unexpected host ({parsed.hostname or 'none'}).")
+        headers["User-Agent"] = TONE3000_USER_AGENT
         request = Request(url, headers=headers)
         try:
             with (opener or build_opener(_NoRedirectHandler).open)(request, timeout=30) as response:
@@ -1061,7 +1169,19 @@ def _fetch_file(url: str, api_key: str, opener=None) -> bytes:
             if location:
                 url = urljoin(url, location)
                 continue
-            raise RuntimeError(f"TONE3000 download failed: HTTP {exc.code}") from exc
+            body = exc.read(1_048_577)
+            dump_path = None
+            try:
+                dump_path = _dump_download_error(exc, access_token, body)
+            except OSError:
+                logging.getLogger(__name__).warning("Could not write the TONE3000 download error dump")
+            reason = _download_failure_reason(exc, access_token, body)
+            detail = f" Provider response: {reason}" if reason else " Provider returned no readable error detail."
+            query_keys = sorted({key for key, _ in parse_qsl(parsed.query) if re.fullmatch(r"[\w-]{1,64}", key)})
+            detail += " URL query fields: " + (", ".join(query_keys) if query_keys else "none") + "."
+            if dump_path:
+                detail += f" Diagnostic dump: {dump_path}"
+            raise RuntimeError(f"TONE3000 download failed: HTTP {exc.code} from {host} (OAuth authorization {'sent' if 'Authorization' in headers else 'not sent'}).{detail}") from exc
         except Exception as exc:
             raise RuntimeError(f"TONE3000 download failed: {exc}") from exc
         if len(data) > MAX_FILE_BYTES:
@@ -1076,16 +1196,18 @@ def _model_link(model: dict) -> str:
     return str(next((model.get(k) for k in ("model_url", "download_url", "file_url", "url") if model.get(k)), "") or "")
 
 
-def _find_model(tone_id: int, model_id: int, architecture: str, opener=None) -> dict | None:
+def _find_model(tone_id: int, model_id: int, architecture: str, opener=None, access_token: str = "") -> dict | None:
     """Look a file up the way the pack list found it, then under the other NAM versions, then directly."""
     kwargs = {"opener": opener} if opener else {}
+    if access_token:
+        kwargs["access_token"] = access_token
     for version in dict.fromkeys((architecture, "2", "1", "any")):
         model = next((m for m in _tone3000_models_payload(tone_id, architecture=version, **kwargs) if m.get("id") == model_id), None)
         if model and _model_link(model):
             return model
-    api_key = _require_tone3000_api_key(for_action="downloads")
+    bearer = access_token or _require_tone3000_api_key(for_action="downloads")
     try:
-        model = _tone3000_get(f"models/{model_id}", None, api_key, opener=opener or urlopen, timeout=20,
+        model = _tone3000_get(f"models/{model_id}", None, bearer, opener=opener or urlopen, timeout=20,
                               failure="TONE3000 file lookup failed")
     except RuntimeError:
         return None
@@ -1095,34 +1217,34 @@ def _find_model(tone_id: int, model_id: int, architecture: str, opener=None) -> 
     return model if isinstance(model, dict) and _model_link(model) else None
 
 
-def tone3000_model_download(tone_id: int, model_id: int, *, architecture: str = "2", opener=None) -> tuple[bytes, str]:
-    """Download a selected pack member server-side, keeping the API key private."""
-    model = _find_model(tone_id, model_id, architecture, opener)
+def tone3000_model_download(tone_id: int, model_id: int, *, architecture: str = "2", access_token: str = "", opener=None) -> tuple[bytes, str]:
+    """Download a selected pack member with a user-authorized TONE3000 OAuth token."""
+    model = _find_model(tone_id, model_id, architecture, opener, access_token)
     if not model:
         raise RuntimeError("TONE3000 has no download link for that file.")
-    api_key = _require_tone3000_api_key(for_action="downloads")
-    return _fetch_file(_model_link(model), api_key, opener), str(model.get("name") or f"tone3000-{model_id}")
+    return _fetch_file(_model_link(model), access_token, opener), str(model.get("name") or f"tone3000-{model_id}")
 
 
 MAX_ZIP_FILES = 60
 MAX_ZIP_BYTES = 250_000_000  # the whole pack, downloaded and zipped in this server's memory
 
 
-def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", opener=None) -> tuple[bytes, int]:
-    """Zip a pack's files on this server (TONE3000's whole-pack link is for approved partners with a user sign-in, not a secret key)."""
+def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", access_token: str = "", opener=None) -> tuple[bytes, int]:
+    """Zip a pack's files on this server using the user's OAuth token for TONE3000 model URLs."""
     kwargs = {"opener": opener} if opener else {}
+    if access_token:
+        kwargs["access_token"] = access_token
     models = [m for m in _tone3000_models_payload(tone_id, architecture=architecture, **kwargs) if _model_link(m)]
     if not models:
         raise RuntimeError("TONE3000 returned no downloadable files in this pack.")
     if len(models) > MAX_ZIP_FILES:
         raise RuntimeError(f"This pack has {len(models)} files; packs over {MAX_ZIP_FILES} are best downloaded on TONE3000.")
-    api_key = _require_tone3000_api_key(for_action="downloads")
     buffer = io.BytesIO()
     used: set = set()
     total = 0
     # Each file is compressed into the archive as it arrives, so the raw downloads are never all held at once.
     with ThreadPoolExecutor(max_workers=6) as pool, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        files = pool.map(lambda m: _fetch_file(_model_link(m), api_key, opener), models)
+        files = pool.map(lambda m: _fetch_file(_model_link(m), access_token, opener), models)
         for model, data in zip(models, files):
             total += len(data)
             if total > MAX_ZIP_BYTES:

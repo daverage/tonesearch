@@ -328,6 +328,19 @@
           then open your <a href="https://www.tone3000.com/settings" target="_blank" rel="noopener">TONE3000 settings</a> to find your API key.
           Use the secret key, which starts with <code>t3k_cs_</code>.</p>
         <label class="field">Secret key <input name="tone3000_api_key" type="password" autocomplete="off" placeholder="t3k_cs_… (optional)"></label>
+        <p class="settings-help">Connect your TONE3000 account to download NAM files in TONE Search. Copy the publishable key from TONE3000 settings; it starts with <code>t3k_pub_</code>.</p>
+        <label class="field">Publishable key <input name="tone3000_client_id" type="text" autocomplete="off" placeholder="t3k_pub_…"></label>
+        <div class="t3k-oauth-controls">
+          <button type="button" class="btn btn-secondary btn-small" id="t3k-connect">Connect TONE3000</button>
+          <span id="t3k-auth-status" role="status" aria-live="polite">Not connected</span>
+        </div>
+        <p class="settings-help">The connection lasts for this browser tab’s session and refreshes automatically. Reconnect after closing the session.</p>
+        <div id="t3k-device-authorization" hidden>
+          <p>Enter this code on TONE3000 to authorize downloads:</p>
+          <p><strong id="t3k-device-code"></strong></p>
+          <p><a id="t3k-verify-link" href="https://www.tone3000.com/activate" target="_blank" rel="noopener">Open TONE3000 activation</a></p>
+          <button type="button" class="btn btn-secondary btn-small" id="t3k-cancel-connect">Cancel</button>
+        </div>
       </fieldset>
 
       <details class="mcp-setup" id="mcp-setup" data-mcp-url="{{ request.url_root }}mcp">

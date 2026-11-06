@@ -759,7 +759,9 @@ def api_download(tone_id: int, model_id: int):
     if denied := _file_request_denied(architecture):
         return denied
     try:
-        data, name = tone3000_model_download(tone_id, model_id, architecture=architecture)
+        token = overrides.get("tone3000_access_token")
+        kwargs = {"access_token": token} if token else {}
+        data, name = tone3000_model_download(tone_id, model_id, architecture=architecture, **kwargs)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
     filename = secure_filename(name) or f"tone3000-{model_id}"
@@ -774,7 +776,9 @@ def api_pack_download(tone_id: int):
     if denied := _file_request_denied(architecture):
         return denied
     try:
-        data, _count = tone3000_pack_zip(tone_id, architecture=architecture)
+        token = overrides.get("tone3000_access_token")
+        kwargs = {"access_token": token} if token else {}
+        data, _count = tone3000_pack_zip(tone_id, architecture=architecture, **kwargs)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503  # not 502: Cloudflare replaces 502 bodies
     return _attachment(data, f"tone3000-pack-{tone_id}.zip", "application/zip")
