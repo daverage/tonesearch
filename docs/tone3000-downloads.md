@@ -103,7 +103,11 @@ TONE Search now implements this workflow:
 4. Open a pack's **Files & questions** and download one model or select
    **Download all**.
 5. Download operations fetch fresh model metadata and file bytes using the
-   connected user's access token. Pack downloads fetch individual models and
+   connected user's access token. Visitors who haven't connected download with
+   the secret key instead (their own from Settings, else the server's
+   `TONE3000_API_KEY`), counted against the hourly `files` limit
+   (`TONESEARCH_FILE_REQUESTS_PER_HOUR`); a connected account or their own secret
+   key skips that limit. `research._download_bearer` picks the credential. Pack downloads fetch individual models and
    ZIP them locally on the server; they do not use TONE3000's partner-only ZIP
    endpoint. Existing limits are 60 files and 250 MB per pack.
 

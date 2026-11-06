@@ -737,7 +737,8 @@ def _file_request_denied(architecture: str):
     """None when a pack file request may go ahead; otherwise the response to send instead."""
     if architecture not in research.ARCHITECTURES:
         return jsonify({"error": "Invalid NAM version."}), 400
-    if not _brings_own("tone3000_api_key") and _over_limit("files"):
+    # A visitor's own secret key or connected TONE3000 account pays for the files; otherwise this site's key does, within the limit.
+    if not (_brings_own("tone3000_api_key") or _brings_own("tone3000_access_token")) and _over_limit("files"):
         return _limited()
     return None
 

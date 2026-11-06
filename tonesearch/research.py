@@ -1142,9 +1142,10 @@ def _download_failure_reason(error: HTTPError, access_token: str, raw_body: byte
 
 
 def _fetch_file(url: str, access_token: str, opener=None) -> bytes:
-    """Download one model with the user's OAuth token only on TONE3000-owned hosts.
+    """Download one model, sending `access_token` only to TONE3000-owned hosts.
 
-    Use the model URL returned for the connected user. Redirects to signed storage links are fetched without the token; redirects are
+    `access_token` is the connected visitor's OAuth token or, when they haven't connected, the secret key that
+    looked the model up (`_download_bearer`). Use the model URL returned for that credential. Redirects to signed storage links are fetched without the token; redirects are
     followed by hand so urllib cannot forward the Authorization header to another host.
     """
     for _ in range(3):
@@ -1153,7 +1154,7 @@ def _fetch_file(url: str, access_token: str, opener=None) -> bytes:
         tone3000_host = host == "tone3000.com" or host.endswith(".tone3000.com")
         if parsed.scheme == "https" and tone3000_host:
             if not access_token:
-                raise RuntimeError("Connect your TONE3000 account in Settings before downloading NAM files.")
+                raise RuntimeError("Downloads need a TONE3000 key: connect your TONE3000 account in Settings.")
             headers = {"Authorization": f"Bearer {access_token}"}
         elif parsed.scheme == "https" and _is_safe_public_host(parsed.hostname or ""):
             headers = {}
@@ -1181,7 +1182,7 @@ def _fetch_file(url: str, access_token: str, opener=None) -> bytes:
             detail += " URL query fields: " + (", ".join(query_keys) if query_keys else "none") + "."
             if dump_path:
                 detail += f" Diagnostic dump: {dump_path}"
-            raise RuntimeError(f"TONE3000 download failed: HTTP {exc.code} from {host} (OAuth authorization {'sent' if 'Authorization' in headers else 'not sent'}).{detail}") from exc
+            raise RuntimeError(f"TONE3000 download failed: HTTP {exc.code} from {host} (authorization {'sent' if 'Authorization' in headers else 'not sent'}).{detail}") from exc
         except Exception as exc:
             raise RuntimeError(f"TONE3000 download failed: {exc}") from exc
         if len(data) > MAX_FILE_BYTES:
@@ -1217,12 +1218,19 @@ def _find_model(tone_id: int, model_id: int, architecture: str, opener=None, acc
     return model if isinstance(model, dict) and _model_link(model) else None
 
 
+def _download_bearer(access_token: str) -> str:
+    """The connected visitor's OAuth token, else the secret key (the visitor's own, then this server's).
+
+    Resolved before any worker threads start, because the visitor's key lives in a ContextVar (`overrides`)."""
+    return access_token or _require_tone3000_api_key(for_action="downloads")
+
+
 def tone3000_model_download(tone_id: int, model_id: int, *, architecture: str = "2", access_token: str = "", opener=None) -> tuple[bytes, str]:
-    """Download a selected pack member with a user-authorized TONE3000 OAuth token."""
+    """Download a selected pack member with the visitor's OAuth token, or the secret key when they haven't connected."""
     model = _find_model(tone_id, model_id, architecture, opener, access_token)
     if not model:
         raise RuntimeError("TONE3000 has no download link for that file.")
-    return _fetch_file(_model_link(model), access_token, opener), str(model.get("name") or f"tone3000-{model_id}")
+    return _fetch_file(_model_link(model), _download_bearer(access_token), opener), str(model.get("name") or f"tone3000-{model_id}")
 
 
 MAX_ZIP_FILES = 60
@@ -1230,7 +1238,8 @@ MAX_ZIP_BYTES = 250_000_000  # the whole pack, downloaded and zipped in this ser
 
 
 def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", access_token: str = "", opener=None) -> tuple[bytes, int]:
-    """Zip a pack's files on this server using the user's OAuth token for TONE3000 model URLs."""
+    """Zip a pack's files on this server, fetched with the visitor's OAuth token or the secret key (`_download_bearer`)."""
+    bearer = _download_bearer(access_token)
     kwargs = {"opener": opener} if opener else {}
     if access_token:
         kwargs["access_token"] = access_token
@@ -1244,7 +1253,7 @@ def tone3000_pack_zip(tone_id: int, *, architecture: str = "any", access_token: 
     total = 0
     # Each file is compressed into the archive as it arrives, so the raw downloads are never all held at once.
     with ThreadPoolExecutor(max_workers=6) as pool, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        files = pool.map(lambda m: _fetch_file(_model_link(m), access_token, opener), models)
+        files = pool.map(lambda m: _fetch_file(_model_link(m), bearer, opener), models)
         for model, data in zip(models, files):
             total += len(data)
             if total > MAX_ZIP_BYTES:

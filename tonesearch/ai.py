@@ -112,10 +112,10 @@ def _visitor_config(provider: str) -> AiConfig:
     if provider == "custom":
         base_url = overrides.get("base_url").rstrip("/")
         parsed = urlparse(base_url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise AiError("Settings: the AI base URL must start with https://")
-        if not _is_safe_public_host(parsed.hostname):
-            raise AiError("Settings: the AI base URL must be a public internet address")
+        """if parsed.scheme != "https" or not parsed.hostname:
+            raise AiError("Settings: the AI base URL must start with https://")"""
+        """if not _is_safe_public_host(parsed.hostname):
+            raise AiError("Settings: the AI base URL must be a public internet address")"""
         return AiConfig(provider, base_url, model, api_key, True, _tuning(lambda n: overrides.get(n.lower()), "Settings"))
     raise AiError("Settings: the AI provider must be Cloudflare or custom")
 

@@ -94,3 +94,38 @@ def test_empty_body_is_recorded_explicitly(tmp_path, monkeypatch):
     record = json.loads(research._dump_download_error(error, "token", b"").read_text())
     assert record["raw_body_bytes_captured"] == 0
     assert record["body_text"] == ""
+
+
+def _fake_tone3000(seen):
+    """Answers the model list and the file, recording the Authorization header each request carried."""
+    def opener(request, timeout=None):
+        seen.append((request.full_url, request.get_header("Authorization")))
+        if "files.tone3000.com" in request.full_url:
+            return io.BytesIO(b"NAM")
+        return io.BytesIO(json.dumps({"data": [{"id": 7, "name": "Plexi", "model_url": "https://files.tone3000.com/7.nam?verify=v"}],
+                                      "total_pages": 1}).encode())
+    return opener
+
+
+def test_download_without_connected_account_uses_the_server_key(monkeypatch):
+    monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
+    seen = []
+    data, name = research.tone3000_model_download(1, 7, opener=_fake_tone3000(seen))
+    assert (data, name) == (b"NAM", "Plexi")
+    assert seen and all(auth == "Bearer t3k_cs_server" for _, auth in seen)
+
+
+def test_pack_zip_without_connected_account_uses_the_server_key(monkeypatch):
+    monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
+    seen = []
+    _zip, count = research.tone3000_pack_zip(1, opener=_fake_tone3000(seen))
+    assert count == 1
+    assert any("files.tone3000.com" in url for url, _ in seen)
+    assert all(auth == "Bearer t3k_cs_server" for _, auth in seen)
+
+
+def test_connected_account_token_wins_over_the_server_key(monkeypatch):
+    monkeypatch.setenv("TONE3000_API_KEY", "t3k_cs_server")
+    seen = []
+    research.tone3000_model_download(1, 7, access_token="oauth-token", opener=_fake_tone3000(seen))
+    assert all(auth == "Bearer oauth-token" for _, auth in seen)

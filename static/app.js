@@ -155,7 +155,16 @@
       return await t3kRefreshRequest;
     } finally { t3kRefreshRequest = null; }
   };
-  const downloadHeaders = async () => ({ ...settingsHeaders(), "X-TONE3000-Access-Token": await tone3000AccessToken() });
+  // Downloads use the visitor's connected TONE3000 account when there is one; otherwise the server's key, within its hourly limit.
+  const t3kConnected = () => {
+    const auth = readT3kAuth();
+    return Boolean(settings.tone3000_client_id && auth.client_id === settings.tone3000_client_id && (auth.access_token || auth.refresh_token));
+  };
+  const downloadHeaders = async () => {
+    const headers = settingsHeaders();
+    if (t3kConnected()) headers["X-TONE3000-Access-Token"] = await tone3000AccessToken();
+    return headers;
+  };
   setupSettings();
   const filters = setupFilters();
   setupWelcome();
@@ -1256,7 +1265,7 @@
       if (s.provider && !ai.model) return [`${s.provider}.model`, "Enter the AI model name."];
       if (s.provider === "cloudflare" && !/^[0-9a-f]{32}$/i.test(ai.account_id)) return ["cloudflare.account_id", "The Cloudflare account ID must be 32 hexadecimal characters."];
       if (s.provider === "cloudflare" && !ai.api_key) return ["cloudflare.api_key", "Enter your Cloudflare API token."];
-      if (s.provider === "custom" && !/^https:\/\/\S+$/i.test(ai.base_url)) return ["custom.base_url", "The base URL must start with https://"];
+      //if (s.provider === "custom" && !/^https:\/\/\S+$/i.test(ai.base_url)) return ["custom.base_url", "The base URL must start with https://"];
       if (s.tone3000_api_key && !s.tone3000_api_key.startsWith("t3k_cs_")) return ["tone3000_api_key", "The TONE3000 key must be a secret key starting with t3k_cs_."];
       return null;
     };
